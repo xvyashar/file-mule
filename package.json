@@ -18,7 +18,10 @@
   },
   "dependencies": {
     "@libsql/client": "^0.17.2",
+    "axios": "^1.15.0",
+    "cache-manager": "^7.2.8",
     "drizzle-orm": "^0.45.2",
-    "grammy": "^1.42.0"
+    "grammy": "^1.42.0",
+    "ulid": "^3.0.2"
   }
 }

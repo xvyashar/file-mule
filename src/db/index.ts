@@ -1,4 +1,5 @@
 import { drizzle } from "drizzle-orm/libsql";
+import { createCache } from "cache-manager";
 
-const db = drizzle(process.env.DB_FILE_NAME!);
-export default db;
+export const db = drizzle(process.env.DB_FILE_NAME!);
+export const cache = createCache();
