@@ -5,3 +5,8 @@ export const usersTable = sqliteTable("Users", {
   telegramId: int().notNull(),
   rubikaId: text(),
 });
+
+export const statesTable = sqliteTable("States", {
+  key: text().primaryKey(),
+  value: text(),
+});

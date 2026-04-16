@@ -35,7 +35,7 @@ export function registerCommands() {
       cache.set(`link_id:${reqId}`, ctx.from?.id, 60000);
 
       ctx.reply(
-        `Link your account to your rubika account by sending:\n\`/link ${reqId}\``,
+        `Link your account to your rubika account by sending this command in rubika bot:\n\`/link ${reqId}\``,
         {
           parse_mode: "MarkdownV2",
           reply_parameters: { message_id: ctx.msg.message_id },
