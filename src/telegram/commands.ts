@@ -4,11 +4,13 @@ import { usersTable } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { ulid } from "ulid";
 import fs, { createWriteStream } from "node:fs";
+import { mkdir, readdir, unlink } from "node:fs/promises";
 import { pipeline } from "stream/promises";
 import got from "got";
 import { createHash } from "node:crypto";
 import { InlineKeyboard } from "grammy";
 import path from "node:path";
+import { spawn } from "node:child_process";
 
 export function registerCommands() {
   bot.command("start", async (ctx) => {
@@ -63,6 +65,7 @@ export function registerCommands() {
   });
 
   bot.on("message:entities:url", async (ctx) => {
+    let currentHash;
     try {
       if (!(await isValidUser(ctx.from.id.toString()))) return;
 
@@ -96,7 +99,7 @@ export function registerCommands() {
         throw error;
       }
 
-      const chunkSize = parseInt(process.env.RK_FILE_CHUNK_SIZE!);
+      const chunkSize = parseInt(process.env.RK_FILE_CHUNK_SIZE!) * 1024 * 1024;
       const chunksCount = Math.ceil(metadata.contentLength / chunkSize);
 
       await cache.set(`downReqOptions:${ctx.from.id}:${hash}`, {
@@ -106,8 +109,10 @@ export function registerCommands() {
         chunksCount,
       });
 
+      currentHash = hash;
+
       ctx.reply(
-        `*URL Download Request:*\n\n🆔 *Name*: ${escapeMarkdownV2(hash)}\n📂 *Mimetype*: ${escapeMarkdownV2(metadata.contentType!)}\n📏 *Size*: ${escapeMarkdownV2(formatFileSize(metadata.contentLength))}\n📐 *Chunk Size*: ${escapeMarkdownV2(formatFileSize(chunkSize))}\n🧩 *File Chunks*: ${chunksCount}`,
+        `*URL Download Request:*\n\n🆔 *Name*: ${escapeMarkdownV2(hash)}\n📂 *Mimetype*: ${escapeMarkdownV2(metadata.contentType!)}\n📏 *Potential Size*: ${escapeMarkdownV2(formatFileSize(metadata.contentLength))}\n📐 *Chunk Size*: ${escapeMarkdownV2(formatFileSize(chunkSize))}\n🧩 *Potential File Chunks*: ${chunksCount}`,
         {
           parse_mode: "MarkdownV2",
           reply_parameters: { message_id: ctx.message.message_id },
@@ -127,6 +132,8 @@ export function registerCommands() {
         },
       );
     } catch (error: any) {
+      if (currentHash)
+        cache.del(`downReqOptions:${ctx.from.id}:${currentHash}`);
       ctx.reply(
         `Something went wrong\\!\n\`\`\`plain\n${error.stack ?? error}\n\`\`\``,
         {
@@ -138,6 +145,7 @@ export function registerCommands() {
   });
 
   bot.on("message:file", async (ctx) => {
+    let currentHash = "";
     try {
       if (!(await isValidUser(ctx.from.id.toString()))) return;
 
@@ -152,7 +160,7 @@ export function registerCommands() {
       // TODO: first check for duplication
 
       const url = `https://api.telegram.org/file/bot${process.env.TG_TOKEN}/${file.file_path}`;
-      const chunkSize = parseInt(process.env.RK_FILE_CHUNK_SIZE!);
+      const chunkSize = parseInt(process.env.RK_FILE_CHUNK_SIZE!) * 1024 * 1024;
       const chunksCount = Math.ceil(file.file_size / chunkSize);
 
       await cache.set(`downReqOptions:${ctx.from.id}:${hash}`, {
@@ -164,8 +172,10 @@ export function registerCommands() {
         chunksCount,
       });
 
+      currentHash = hash;
+
       ctx.reply(
-        `*Telegram Download Request:*\n\n🆔 *Name*: ${escapeMarkdownV2(hash)}\n📏 *Size*: ${escapeMarkdownV2(formatFileSize(file.file_size))}\n📐 *Chunk Size*: ${escapeMarkdownV2(formatFileSize(chunkSize))}\n🧩 *File Chunks*: ${chunksCount}`,
+        `*Telegram Download Request:*\n\n🆔 *Name*: ${escapeMarkdownV2(hash)}\n📏 *Potential Size*: ${escapeMarkdownV2(formatFileSize(file.file_size))}\n📐 *Chunk Size*: ${escapeMarkdownV2(formatFileSize(chunkSize))}\n🧩 *Potential File Chunks*: ${chunksCount}`,
         {
           parse_mode: "MarkdownV2",
           reply_parameters: { message_id: ctx.message.message_id },
@@ -185,6 +195,9 @@ export function registerCommands() {
         },
       );
     } catch (error: any) {
+      if (currentHash)
+        cache.del(`downReqOptions:${ctx.from.id}:${currentHash}`);
+
       ctx.reply(
         `Something went wrong\\!\n\`\`\`plain\n${error.stack ?? error}\n\`\`\``,
         {
@@ -203,69 +216,72 @@ export function registerCommands() {
   });
 
   bot.on("callback_query:data", async (ctx) => {
-    await ctx.answerCallbackQuery();
+    let currentHash = "";
+    let currentFile = "";
+    try {
+      await ctx.answerCallbackQuery();
 
-    if (ctx.callbackQuery.data.startsWith("toggleCompression")) {
-      const [_command, hash] = ctx.callbackQuery.data.split(":");
-      const ops = (await cache.get(
-        `downReqOptions:${ctx.from.id}:${hash}`,
-      )) as any;
-      ops.compression = !ops.compression;
-      await cache.set(`downReqOptions:${ctx.from.id}:${hash}`, ops);
+      if (ctx.callbackQuery.data.startsWith("toggleCompression")) {
+        const [_command, hash] = ctx.callbackQuery.data.split(":");
+        currentHash = hash!;
+        const ops = (await cache.get(
+          `downReqOptions:${ctx.from.id}:${hash}`,
+        )) as any;
+        ops.compression = !ops.compression;
+        await cache.set(`downReqOptions:${ctx.from.id}:${hash}`, ops);
 
-      await bot.api.editMessageReplyMarkup(
-        ctx.chatId!,
-        ctx.callbackQuery.message?.message_id!,
-        {
-          reply_markup: new InlineKeyboard()
-            .text(
-              `Compression: ${ops.compression ? "ON" : "OFF"}`,
-              `toggleCompression:${hash}`,
-            )
-            .style("primary")
-            .row()
-            .text("❌ Cancel", `cancelReq:${hash}`)
-            .style("danger")
-            .text("✅ Confirm", `confirmReq:${hash}`)
-            .style("success"),
-        },
-      );
+        await bot.api.editMessageReplyMarkup(
+          ctx.chatId!,
+          ctx.callbackQuery.message?.message_id!,
+          {
+            reply_markup: new InlineKeyboard()
+              .text(
+                `Compression: ${ops.compression ? "ON" : "OFF"}`,
+                `toggleCompression:${hash}`,
+              )
+              .style("primary")
+              .row()
+              .text("❌ Cancel", `cancelReq:${hash}`)
+              .style("danger")
+              .text("✅ Confirm", `confirmReq:${hash}`)
+              .style("success"),
+          },
+        );
 
-      return;
-    }
+        return;
+      }
 
-    if (ctx.callbackQuery.data.startsWith("cancelReq")) {
-      const [_command, hash] = ctx.callbackQuery.data.split(":");
-      await cache.del(`downReqOptions:${ctx.from.id}:${hash}`);
+      if (ctx.callbackQuery.data.startsWith("cancelReq")) {
+        const [_command, hash] = ctx.callbackQuery.data.split(":");
+        await cache.del(`downReqOptions:${ctx.from.id}:${hash}`);
+        currentHash = hash!;
 
-      await bot.api.editMessageText(
-        ctx.chatId!,
-        ctx.callbackQuery.message?.message_id!,
-        "❌ Request has been canceled!",
-        { reply_markup: new InlineKeyboard() },
-      );
+        await bot.api.editMessageText(
+          ctx.chatId!,
+          ctx.callbackQuery.message?.message_id!,
+          "❌ Request has been canceled!",
+          { reply_markup: new InlineKeyboard() },
+        );
 
-      return;
-    }
+        return;
+      }
 
-    if (ctx.callbackQuery.data.startsWith("confirmReq")) {
-      const [_command, hash] = ctx.callbackQuery.data.split(":");
-      const ops = (await cache.get(
-        `downReqOptions:${ctx.from.id}:${hash}`,
-      )) as any;
+      if (ctx.callbackQuery.data.startsWith("confirmReq")) {
+        const [_command, hash] = ctx.callbackQuery.data.split(":");
+        currentHash = hash!;
+        const ops = (await cache.get(
+          `downReqOptions:${ctx.from.id}:${hash}`,
+        )) as any;
 
-      await bot.api.editMessageText(
-        ctx.chatId!,
-        ctx.callbackQuery.message?.message_id!,
-        `Downloading...\n${createProgressBar(0)} ${0}%`,
-        { reply_markup: new InlineKeyboard() },
-      );
+        await bot.api.editMessageText(
+          ctx.chatId!,
+          ctx.callbackQuery.message?.message_id!,
+          `Downloading...\n${createProgressBar(0)} ${0}%`,
+          { reply_markup: new InlineKeyboard() },
+        );
 
-      let prevPercent = "0";
-      await startDownload(
-        ops.url,
-        hash!,
-        (percent) => {
+        let prevPercent = "0";
+        const outPath = await startDownload(ops.url, hash!, (percent) => {
           let percentStr = percent.toFixed(1);
           if (prevPercent === percentStr) return;
           prevPercent = percentStr;
@@ -276,22 +292,60 @@ export function registerCommands() {
               ctx.callbackQuery.message?.message_id!,
               `Downloading...\n${createProgressBar(percent)} ${percentStr}%`,
             );
-        },
-        (error) =>
-          void bot.api.editMessageText(
+        });
+
+        if (!outPath) return;
+        currentFile = outPath;
+
+        // bot.api.editMessageText(
+        //   ctx.chatId!,
+        //   ctx.callbackQuery.message?.message_id!,
+        //   "✅ Successfully downloaded!",
+        // );
+
+        // TODO: handle compression
+        let readyFiles = [outPath];
+        if (ops.compression) {
+          await bot.api.editMessageText(
             ctx.chatId!,
             ctx.callbackQuery.message?.message_id!,
-            `❌ Failed to complete the downloading process\\!\n\`\`\`${escapeMarkdownV2(error.stack ?? error)}\n\`\`\``,
-            { parse_mode: "MarkdownV2" },
-          ),
-      );
+            "⚙️ Compressing...",
+          );
+
+          const compressedDir = path.join(
+            outPath,
+            "..",
+            "..",
+            "compressed",
+            hash!,
+          );
+          await compressFile(
+            outPath,
+            compressedDir,
+            parseInt(process.env.RK_FILE_CHUNK_SIZE!),
+            process.env.COMPRESSED_PASS!,
+          );
+
+          await unlink(outPath);
+          currentFile = compressedDir;
+
+          const files = await readdir(compressedDir);
+          for (let i = 0; i < files.length; i++) {
+            readyFiles[i] = files[i]!;
+          }
+        }
+      }
+    } catch (error: any) {
+      if (currentHash)
+        cache.del(`downReqOptions:${ctx.from.id}:${currentHash}`);
+      if (currentFile) unlink(currentFile);
 
       bot.api.editMessageText(
         ctx.chatId!,
         ctx.callbackQuery.message?.message_id!,
-        "✅ Successfully downloaded!",
+        `Something went wrong\\!\n\`\`\`${escapeMarkdownV2(error.stack ?? error)}\n\`\`\``,
+        { parse_mode: "MarkdownV2" },
       );
-      // TODO: handle compression
     }
   });
 }
@@ -364,38 +418,31 @@ async function startDownload(
   url: string,
   hash: string,
   onProgress: (percent: number) => void | Promise<void>,
-  onError: (error: any) => void | Promise<void>,
 ) {
-  try {
-    if (!fs.existsSync(path.join(import.meta.dirname, "..", "..", "downloads")))
-      fs.mkdirSync(path.join(import.meta.dirname, "..", "..", "downloads"));
+  if (!fs.existsSync(path.join(import.meta.dirname, "..", "..", "downloads")))
+    fs.mkdirSync(path.join(import.meta.dirname, "..", "..", "downloads"));
 
-    const downloadStream = got
-      .stream(url, { followRedirect: true })
-      .on("downloadProgress", ({ percent }) => onProgress(percent));
+  const downloadStream = got
+    .stream(url, { followRedirect: true })
+    .on("downloadProgress", ({ percent }) => onProgress(percent));
 
-    let format = url.substring(url.lastIndexOf("/") + 1);
-    format = format.substring(
-      0,
-      format.includes("?") ? format.indexOf("?") : format.length,
-    );
-    format = format.substring(format.lastIndexOf("."));
+  let format = url.substring(url.lastIndexOf("/") + 1);
+  format = format.substring(
+    0,
+    format.includes("?") ? format.indexOf("?") : format.length,
+  );
+  format = format.substring(format.lastIndexOf("."));
 
-    await pipeline(
-      downloadStream,
-      createWriteStream(
-        path.join(
-          import.meta.dirname,
-          "..",
-          "..",
-          "downloads",
-          `${hash}${format}`,
-        ),
-      ),
-    );
-  } catch (error: any) {
-    onError(error);
-  }
+  const outPath = path.join(
+    import.meta.dirname,
+    "..",
+    "..",
+    "downloads",
+    `${hash}${format}`,
+  );
+  await pipeline(downloadStream, createWriteStream(outPath));
+
+  return outPath;
 }
 
 function createProgressBar(percent: number, barLength = 20) {
@@ -408,4 +455,47 @@ function createProgressBar(percent: number, barLength = 20) {
   const emptyChar = "░";
 
   return `[${filledChar.repeat(filledLength) + emptyChar.repeat(emptyLength)}]`;
+}
+
+async function compressFile(
+  inputFile: string,
+  outputDir: string,
+  chunkSize: number,
+  password: string,
+) {
+  if (!fs.existsSync(outputDir)) await mkdir(outputDir, { recursive: true });
+
+  const fileName = path.basename(inputFile, path.extname(inputFile));
+  const outputBase = path.join(outputDir, `${fileName}.zip`);
+
+  const args = [
+    "a",
+    "-t7z",
+    `-v${chunkSize}m`,
+    "-mx=5",
+    `-p${password}`,
+    "-mhe=on",
+    outputBase,
+    inputFile,
+  ];
+
+  return new Promise((resolve, reject) => {
+    const sevenZip = spawn("7z", args);
+
+    sevenZip.on("close", (code) => {
+      if (code === 0) {
+        resolve(outputBase);
+      } else {
+        reject(new Error(`7z exited with code ${code}`));
+      }
+    });
+
+    sevenZip.on("error", (err) => {
+      reject(
+        new Error(
+          `Failed to run 7z: ${err.message}. Make sure 7-Zip is installed.`,
+        ),
+      );
+    });
+  });
 }
