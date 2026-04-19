@@ -4,6 +4,9 @@ import { statesTable } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { Adaptor } from "./adaptor.js";
 import type { BaleSendMessage, BaleUpdate } from "./types.js";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import FormData from "form-data";
 
 export class BaleAdaptor extends Adaptor {
   protected token = process.env.BALE_TOKEN!;
@@ -103,7 +106,55 @@ export class BaleAdaptor extends Adaptor {
 
   async sendMessage(payload: BaleSendMessage) {
     await this.api.post("/sendMessage", payload);
-
     return;
+  }
+
+  async uploadFile({
+    filePath,
+    chat_id,
+  }: {
+    filePath: string;
+    chat_id: string;
+  }) {
+    try {
+      await this.retry(
+        async () => {
+          const formData = new FormData();
+
+          const fileBuffer = await readFile(filePath);
+          formData.append("document", fileBuffer, {
+            filename: path.basename(filePath),
+          });
+          formData.append("chat_id", chat_id);
+
+          await this.api.post("/sendDocument", formData);
+        },
+        3,
+        5000,
+      );
+
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, reason: error };
+    }
+  }
+
+  private async retry(
+    job: () => any | Promise<any>,
+    maxTries: number,
+    retryDelay: number,
+  ) {
+    for (let i = 0; i < maxTries; i++) {
+      try {
+        return await job();
+      } catch (error) {
+        if (i == maxTries - 1) throw error;
+        else await this.sleep(retryDelay);
+      }
+    }
+  }
+
+  private sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

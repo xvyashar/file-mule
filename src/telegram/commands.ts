@@ -202,10 +202,10 @@ export async function registerCommands() {
 
       const files = item.addresses?.split(",")!;
       let completedCounter = item.completedChunks || 0;
-      let uploadMsg = `*Ready to upload\\!*\n\nChunks:`;
+      let uploadMsg = `${item.lastChunkStatus === "UPLOADING" ? "*Uploading\\.\\.\\.*" : "*Ready to upload\\!*"}\n\nChunks:`;
       for (let i = 0; i < files.length; i++) {
         uploadMsg += escapeMarkdownV2(
-          `\n${completedCounter-- > 0 ? "🟢" : i == files.length - 1 ? getChunkStatusCharacter(item.lastChunkStatus!) : "⚪️"} - ${path.basename(files[i]!)}`,
+          `\n${completedCounter-- > 0 ? "🟢" : i == item.completedChunks ? getChunkStatusCharacter(item.lastChunkStatus!) : "⚪️"} - ${path.basename(files[i]!)}`,
         );
       }
 
@@ -656,6 +656,7 @@ export async function registerCommands() {
           addresses: readyFiles.join(","),
         });
 
+        cache.del(`downReqOptions:${ctx.from.id}:${hash}`);
         currentHash = "";
         currentFile = "";
 
@@ -673,6 +674,37 @@ export async function registerCommands() {
           parse_mode: "MarkdownV2",
           reply_markup: makeUploadKeyboard(hash!, true),
         });
+      }
+
+      if (ctx.callbackQuery.data.startsWith("queue")) {
+        const [_command, index] = ctx.callbackQuery.data.split(":");
+
+        const userQueue = await db
+          .select({ fileHash: queueTable.fileHash })
+          .from(queueTable)
+          .where(eq(queueTable.userTg, ctx.from.id))
+          .offset(parseInt(index!))
+          .limit(10);
+
+        let replyMsg = `*Upload Queue*\n\n${escapeMarkdownV2("----------")}`;
+        if (!userQueue.length) replyMsg += "\n_empty list_";
+        else
+          for (const item of userQueue) {
+            replyMsg += `\n🆔 \`${escapeMarkdownV2(item.fileHash!)}\``;
+          }
+        replyMsg += `\n${escapeMarkdownV2("----------")}\n\nTo process an item in queue send \`/queue_item {ITEM_ID}\` command\\.`;
+
+        return bot.api.editMessageText(
+          ctx.chatId!,
+          ctx.callbackQuery.message?.message_id!,
+          replyMsg,
+          {
+            reply_markup: makeQueueListKeyboard(
+              parseInt(index!),
+              userQueue.length >= 10,
+            ),
+          },
+        );
       }
 
       if (ctx.callbackQuery.data.startsWith("giveUp")) {
@@ -714,38 +746,150 @@ export async function registerCommands() {
         return bot.api.editMessageText(
           ctx.chatId!,
           ctx.callbackQuery.message?.message_id!,
-          "The file removed from your queue successfully!",
+          "The file has been removed from your queue successfully!",
         );
       }
 
-      if (ctx.callbackQuery.data.startsWith("queue")) {
-        const [_command, index] = ctx.callbackQuery.data.split(":");
+      if (ctx.callbackQuery.data.startsWith("uploadReq")) {
+        const [_command, hash] = ctx.callbackQuery.data.split(":");
+        const item = (
+          await db
+            .select({
+              id: queueTable.id,
+              fileHash: queueTable.fileHash,
+              addresses: queueTable.addresses,
+              completedChunks: queueTable.completedChunks,
+              lastChunkStatus: queueTable.lastChunkStatus,
+            })
+            .from(queueTable)
+            .where(
+              and(
+                eq(queueTable.userTg, ctx.from.id),
+                eq(queueTable.fileHash, hash!),
+              ),
+            )
+        )[0];
 
-        const userQueue = await db
-          .select({ fileHash: queueTable.fileHash })
-          .from(queueTable)
-          .where(eq(queueTable.userTg, ctx.from.id))
-          .offset(parseInt(index!))
-          .limit(10);
+        if (!item)
+          return bot.api.editMessageText(
+            ctx.chatId!,
+            ctx.callbackQuery.message?.message_id!,
+            "The file that you're looking for is removed!",
+          );
 
-        let replyMsg = `*Upload Queue*\n\n${escapeMarkdownV2("----------")}`;
-        if (!userQueue.length) replyMsg += "\n_empty list_";
-        else
-          for (const item of userQueue) {
-            replyMsg += `\n🆔 \`${escapeMarkdownV2(item.fileHash!)}\``;
+        if (
+          item.lastChunkStatus != "NOT-STARTED" &&
+          item.lastChunkStatus != "FAILED"
+        )
+          return bot.api.editMessageText(
+            ctx.chatId!,
+            ctx.callbackQuery.message?.message_id!,
+            "Another process is uploading this file. If this is a mistake give up and start over :)",
+          );
+
+        const addresses: string[] = item.addresses?.split(",") as string[];
+
+        const user = (
+          await db
+            .select({
+              irSocial: usersTable.irSocial,
+              irSocialId: usersTable.irSocialId,
+            })
+            .from(usersTable)
+            .where(eq(usersTable.telegramId, ctx.from.id))
+        )[0];
+
+        let completedChunks = item.completedChunks || 0;
+        for (let i = item.completedChunks || 0; i < addresses.length; i++) {
+          //? update states
+          await db
+            .update(queueTable)
+            .set({ lastChunkStatus: "UPLOADING" })
+            .where(eq(queueTable.id, item.id));
+
+          let completedCounter = completedChunks;
+          let uploadMsg = "*Uploading\\.\\.\\.*\n\nChunks:";
+          for (let j = 0; j < addresses.length; j++) {
+            uploadMsg += escapeMarkdownV2(
+              `\n${completedCounter-- > 0 ? "🟢" : j == completedChunks ? "🟡" : "⚪️"} - ${path.basename(addresses[j]!)}`,
+            );
           }
-        replyMsg += `\n${escapeMarkdownV2("----------")}\n\nTo process an item in queue send \`/queue_item {ITEM_ID}\` command\\.`;
+
+          await bot.api.editMessageText(
+            ctx.chatId!,
+            ctx.callbackQuery.message?.message_id!,
+            uploadMsg,
+            {
+              parse_mode: "MarkdownV2",
+              reply_markup: makeUploadKeyboard(item.fileHash!, false),
+            },
+          );
+
+          const res: { success: boolean; reason?: any } = await (
+            user?.irSocial === "bale"
+              ? BaleAdaptor.getInstance()
+              : RubikaAdaptor.getInstance()
+          ).uploadFile({
+            filePath: addresses[i]!,
+            chat_id: user?.irSocialId!,
+          });
+
+          if (res.success)
+            await db
+              .update(queueTable)
+              .set({
+                lastChunkStatus: "NOT-STARTED",
+                completedChunks: ++completedChunks,
+              })
+              .where(eq(queueTable.id, item.id));
+          else {
+            await db
+              .update(queueTable)
+              .set({
+                lastChunkStatus: "FAILED",
+              })
+              .where(eq(queueTable.id, item.id));
+
+            let completedCounter = completedChunks;
+            let uploadMsg = "*Failed to upload\\!*\n\nChunks:";
+            for (let j = 0; j < addresses.length; j++) {
+              uploadMsg += escapeMarkdownV2(
+                `\n${completedCounter-- > 0 ? "🟢" : j == completedChunks ? "🔴" : "⚪️"} - ${path.basename(addresses[j]!)}`,
+              );
+            }
+            uploadMsg += `\n\n\`\`\`${res.reason.stack ?? res.reason}\`\`\``;
+
+            return bot.api.editMessageText(
+              ctx.chatId!,
+              ctx.callbackQuery.message?.message_id!,
+              uploadMsg,
+              {
+                parse_mode: "MarkdownV2",
+                reply_markup: makeUploadKeyboard(item.fileHash!, true, true),
+              },
+            );
+          }
+        }
+
+        const toGetRemoved = addresses[0]?.includes("compressed")
+          ? path.dirname(addresses[0]!)
+          : addresses[0]!;
+
+        await rm(toGetRemoved, { recursive: true });
+
+        await db
+          .delete(queueTable)
+          .where(
+            and(
+              eq(queueTable.userTg, ctx.from.id),
+              eq(queueTable.fileHash, hash!),
+            ),
+          );
 
         return bot.api.editMessageText(
           ctx.chatId!,
           ctx.callbackQuery.message?.message_id!,
-          replyMsg,
-          {
-            reply_markup: makeQueueListKeyboard(
-              parseInt(index!),
-              userQueue.length >= 10,
-            ),
-          },
+          "✅ Congratulations! Your file got uploaded successfully.",
         );
       }
     } catch (error: any) {

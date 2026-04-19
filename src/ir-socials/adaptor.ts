@@ -16,4 +16,7 @@ export abstract class Adaptor extends EventEmitter {
   abstract httpPing(): string | Promise<string>;
   abstract startPolling(): void | Promise<void>;
   abstract sendMessage(payload: any): Promise<void>;
+  abstract uploadFile(
+    payload: any,
+  ): Promise<{ success: boolean; reason?: any }>;
 }

@@ -4,6 +4,9 @@ import { db } from "../db/index.js";
 import { statesTable } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { Adaptor } from "./adaptor.js";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import FormData from "form-data";
 
 export class RubikaAdaptor extends Adaptor {
   protected token = process.env.RK_TOKEN!;
@@ -105,5 +108,78 @@ export class RubikaAdaptor extends Adaptor {
   async sendMessage(payload: RKSendMessage) {
     await this.api.post("/sendMessage", payload);
     return;
+  }
+
+  async uploadFile({
+    filePath,
+    chat_id,
+  }: {
+    filePath: string;
+    chat_id: string;
+  }) {
+    try {
+      let uploadUrl: string | any;
+      let file_id: string | any;
+      await this.retry(
+        async () => {
+          if (!uploadUrl) {
+            const {
+              data: { data },
+            } = await this.api.post("/requestSendFile", {
+              type: "File",
+            });
+            uploadUrl = data.upload_url;
+          }
+
+          if (!file_id) {
+            const formData = new FormData();
+
+            const fileBuffer = await readFile(filePath);
+            formData.append("file", fileBuffer, {
+              filename: path.basename(filePath),
+            });
+
+            const {
+              data: {
+                data: { file_id: fileId },
+              },
+            } = await axios.post(uploadUrl, formData);
+
+            file_id = fileId;
+          }
+
+          await this.api.post("/sendFile", {
+            chat_id,
+            file_id,
+            text: path.basename(filePath),
+          });
+        },
+        3,
+        5000,
+      );
+
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, reason: error };
+    }
+  }
+
+  private async retry(
+    job: () => any | Promise<any>,
+    maxTries: number,
+    retryDelay: number,
+  ) {
+    for (let i = 0; i < maxTries; i++) {
+      try {
+        return await job();
+      } catch (error) {
+        if (i == maxTries - 1) throw error;
+        else await this.sleep(retryDelay);
+      }
+    }
+  }
+
+  private sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
