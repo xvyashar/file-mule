@@ -75,7 +75,7 @@ export class RubikaAdaptor extends EventEmitter {
           this.emit("message", update);
         }
       } catch (error) {
-        console.log(error);
+        // console.log(error);
       }
     }, 2000);
   }

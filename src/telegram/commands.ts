@@ -1,10 +1,10 @@
 import { bot } from "./index.js";
 import { db, cache } from "../db/index.js";
-import { usersTable } from "../db/schema.js";
-import { eq } from "drizzle-orm";
+import { queueTable, usersTable } from "../db/schema.js";
+import { and, eq } from "drizzle-orm";
 import { ulid } from "ulid";
 import fs, { createWriteStream } from "node:fs";
-import { mkdir, readdir, unlink } from "node:fs/promises";
+import { mkdir, readdir, rm } from "node:fs/promises";
 import { pipeline } from "stream/promises";
 import got from "got";
 import { createHash } from "node:crypto";
@@ -12,7 +12,7 @@ import { InlineKeyboard } from "grammy";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
-export function registerCommands() {
+export async function registerCommands() {
   bot.command("start", async (ctx) => {
     try {
       const user = (
@@ -64,6 +64,112 @@ export function registerCommands() {
     }
   });
 
+  bot.command("queue", async (ctx) => {
+    try {
+      if (!ctx.from) throw new Error("ctx.from does not exist");
+
+      const userQueue = await db
+        .select({ fileHash: queueTable.fileHash })
+        .from(queueTable)
+        .where(eq(queueTable.userTg, ctx.from.id))
+        .limit(10);
+
+      let replyMsg = `*Upload Queue*\n\n${escapeMarkdownV2("----------")}`;
+      if (!userQueue.length) replyMsg += "\n_empty list_";
+      else
+        for (const item of userQueue) {
+          replyMsg += `\n🆔 \`${escapeMarkdownV2(item.fileHash!)}\``;
+        }
+      replyMsg += `\n${escapeMarkdownV2("----------")}\n\nTo process an item in queue send \`/queue_item {ITEM_ID}\` command\\.`;
+
+      ctx.reply(
+        replyMsg,
+        userQueue.length >= 10
+          ? {
+              parse_mode: "MarkdownV2",
+              reply_markup: makeQueueListKeyboard(0, true),
+            }
+          : {
+              parse_mode: "MarkdownV2",
+            },
+      );
+    } catch (error: any) {
+      ctx.reply(
+        `Something went wrong!\n\`\`\`plain\n${error.stack ?? error}\n\`\`\``,
+        {
+          parse_mode: "MarkdownV2",
+          reply_parameters: { message_id: ctx.msg.message_id },
+        },
+      );
+    }
+  });
+
+  bot.command("queue_item", async (ctx) => {
+    try {
+      if (!ctx.from) throw new Error("ctx.from does not exist");
+
+      const [_command, hash] = ctx.message?.text.split(" ")!;
+
+      if (!hash)
+        return ctx.reply(
+          "Provide an item id after this command like this:\n`/queue_item {ITEM_ID}`",
+          {
+            parse_mode: "MarkdownV2",
+            reply_parameters: { message_id: ctx.msg.message_id },
+          },
+        );
+
+      const item = (
+        await db
+          .select({
+            addresses: queueTable.addresses,
+            completedChunks: queueTable.completedChunks,
+            lastChunkStatus: queueTable.lastChunkStatus,
+          })
+          .from(queueTable)
+          .where(
+            and(
+              eq(queueTable.userTg, ctx.from.id),
+              eq(queueTable.fileHash, hash!),
+            ),
+          )
+      )[0];
+      if (!item)
+        throw new Error(`item does not exist in db: ${ctx.from.id}:${hash}`);
+
+      const files = item.addresses?.split(",")!;
+      let completedCounter = item.completedChunks || 0;
+      let uploadMsg = `*Ready to upload\\!*\n\nChunks:`;
+      for (let i = 0; i < files.length; i++) {
+        uploadMsg += escapeMarkdownV2(
+          `\n${completedCounter-- > 0 ? "🟢" : i == files.length - 1 ? getChunkStatusCharacter(item.lastChunkStatus!) : "⚪️"} - ${path.basename(files[i]!)}`,
+        );
+      }
+
+      return ctx.reply(uploadMsg, {
+        parse_mode: "MarkdownV2",
+        reply_markup: makeUploadKeyboard(
+          hash!,
+          item.lastChunkStatus != "UPLOADING",
+          item.lastChunkStatus == "FAILED",
+        ),
+      });
+    } catch (error: any) {
+      ctx.reply(
+        `Something went wrong!\n\`\`\`plain\n${error.stack ?? error}\n\`\`\``,
+        {
+          parse_mode: "MarkdownV2",
+          reply_parameters: { message_id: ctx.msg.message_id },
+        },
+      );
+    }
+  });
+
+  bot.api.setMyCommands([
+    { command: "queue", description: "Shows your pending uploads queue" },
+    { command: "queue_item", description: "Manage an item in the queue" },
+  ]);
+
   bot.on("message:entities:url", async (ctx) => {
     let currentHash;
     try {
@@ -76,7 +182,24 @@ export function registerCommands() {
 
       const hash = await md5(ctx.message.text);
 
-      // TODO: first check for duplication
+      const isInQueue = (
+        await db
+          .select({ id: queueTable.id })
+          .from(queueTable)
+          .where(
+            and(
+              eq(queueTable.userTg, ctx.from.id),
+              eq(queueTable.fileHash, hash),
+            ),
+          )
+      )[0]?.id!!;
+      if (isInQueue)
+        return ctx.reply(
+          "This link exists in the queue without finishing its process!",
+          {
+            reply_parameters: { message_id: ctx.message.message_id },
+          },
+        );
 
       const reply = await ctx.reply("Retrieving link metadata...", {
         reply_parameters: { message_id: ctx.msg.message_id },
@@ -116,19 +239,7 @@ export function registerCommands() {
         {
           parse_mode: "MarkdownV2",
           reply_parameters: { message_id: ctx.message.message_id },
-          reply_markup: new InlineKeyboard()
-            .text(
-              "Compression: ON",
-              chunksCount > 1
-                ? "forceCompression"
-                : `toggleCompression:${hash}`,
-            )
-            .style("primary")
-            .row()
-            .text("❌ Cancel", `cancelReq:${hash}`)
-            .style("danger")
-            .text("✅ Confirm", `confirmReq:${hash}`)
-            .style("success"),
+          reply_markup: makeRequestKeyboard(hash, true, chunksCount > 1),
         },
       );
     } catch (error: any) {
@@ -157,7 +268,24 @@ export function registerCommands() {
           parse_mode: "MarkdownV2",
         });
 
-      // TODO: first check for duplication
+      const isInQueue = (
+        await db
+          .select({ id: queueTable.id })
+          .from(queueTable)
+          .where(
+            and(
+              eq(queueTable.userTg, ctx.from.id),
+              eq(queueTable.fileHash, hash),
+            ),
+          )
+      )[0]?.id!!;
+      if (isInQueue)
+        return ctx.reply(
+          "This link exists in the queue without finishing its process!",
+          {
+            reply_parameters: { message_id: ctx.message.message_id },
+          },
+        );
 
       const url = `https://api.telegram.org/file/bot${process.env.TG_TOKEN}/${file.file_path}`;
       const chunkSize = parseInt(process.env.RK_FILE_CHUNK_SIZE!) * 1024 * 1024;
@@ -179,19 +307,7 @@ export function registerCommands() {
         {
           parse_mode: "MarkdownV2",
           reply_parameters: { message_id: ctx.message.message_id },
-          reply_markup: new InlineKeyboard()
-            .text(
-              "Compression: ON",
-              chunksCount > 1
-                ? "forceCompression"
-                : `toggleCompression:${hash}`,
-            )
-            .style("primary")
-            .row()
-            .text("❌ Cancel", `cancelReq:${hash}`)
-            .style("danger")
-            .text("✅ Confirm", `confirmReq:${hash}`)
-            .style("success"),
+          reply_markup: makeRequestKeyboard(hash, true, chunksCount > 1),
         },
       );
     } catch (error: any) {
@@ -234,17 +350,7 @@ export function registerCommands() {
           ctx.chatId!,
           ctx.callbackQuery.message?.message_id!,
           {
-            reply_markup: new InlineKeyboard()
-              .text(
-                `Compression: ${ops.compression ? "ON" : "OFF"}`,
-                `toggleCompression:${hash}`,
-              )
-              .style("primary")
-              .row()
-              .text("❌ Cancel", `cancelReq:${hash}`)
-              .style("danger")
-              .text("✅ Confirm", `confirmReq:${hash}`)
-              .style("success"),
+            reply_markup: makeRequestKeyboard(hash!, ops.compression, false),
           },
         );
 
@@ -280,6 +386,7 @@ export function registerCommands() {
           { reply_markup: new InlineKeyboard() },
         );
 
+        //* Download Section
         let prevPercent = "0";
         const outPath = await startDownload(ops.url, hash!, (percent) => {
           let percentStr = percent.toFixed(1);
@@ -297,14 +404,9 @@ export function registerCommands() {
         if (!outPath) return;
         currentFile = outPath;
 
-        // bot.api.editMessageText(
-        //   ctx.chatId!,
-        //   ctx.callbackQuery.message?.message_id!,
-        //   "✅ Successfully downloaded!",
-        // );
-
-        // TODO: handle compression
         let readyFiles = [outPath];
+
+        //* Compression Section
         if (ops.compression) {
           await bot.api.editMessageText(
             ctx.chatId!,
@@ -326,19 +428,118 @@ export function registerCommands() {
             process.env.COMPRESSED_PASS!,
           );
 
-          await unlink(outPath);
+          await rm(outPath);
           currentFile = compressedDir;
 
           const files = await readdir(compressedDir);
           for (let i = 0; i < files.length; i++) {
-            readyFiles[i] = files[i]!;
+            readyFiles[i] = path.join(compressedDir, files[i]!);
           }
         }
+
+        await db.insert(queueTable).values({
+          userTg: ctx.from.id,
+          fileHash: hash,
+          chunks: readyFiles.length,
+          addresses: readyFiles.join(","),
+        });
+
+        currentHash = "";
+        currentFile = "";
+
+        await bot.api.deleteMessage(
+          ctx.chatId!,
+          ctx.callbackQuery.message?.message_id!,
+        );
+
+        let uploadMsg = `*Ready to upload\\!*\n\nChunks:`;
+        for (const file of readyFiles) {
+          uploadMsg += escapeMarkdownV2(`\n⚪️ - ${path.basename(file)}`);
+        }
+
+        return ctx.reply(uploadMsg, {
+          parse_mode: "MarkdownV2",
+          reply_markup: makeUploadKeyboard(hash!, true),
+        });
+      }
+
+      if (ctx.callbackQuery.data.startsWith("giveUp")) {
+        const [_command, hash] = ctx.callbackQuery.data.split(":");
+        const item = (
+          await db
+            .select({ addresses: queueTable.addresses })
+            .from(queueTable)
+            .where(
+              and(
+                eq(queueTable.userTg, ctx.from.id),
+                eq(queueTable.fileHash, hash!),
+              ),
+            )
+        )[0];
+
+        if (!item)
+          return bot.api.editMessageText(
+            ctx.chatId!,
+            ctx.callbackQuery.message?.message_id!,
+            "The file that you're looking for is removed already!",
+          );
+
+        const addresses: string[] = item.addresses?.split(",") as string[];
+        const toGetRemoved = addresses[0]?.includes("compressed")
+          ? path.dirname(addresses[0]!)
+          : addresses[0]!;
+
+        await rm(toGetRemoved, { recursive: true });
+        await db
+          .delete(queueTable)
+          .where(
+            and(
+              eq(queueTable.userTg, ctx.from.id),
+              eq(queueTable.fileHash, hash!),
+            ),
+          );
+
+        return bot.api.editMessageText(
+          ctx.chatId!,
+          ctx.callbackQuery.message?.message_id!,
+          "The file removed from your queue successfully!",
+        );
+      }
+
+      if (ctx.callbackQuery.data.startsWith("queue")) {
+        const [_command, index] = ctx.callbackQuery.data.split(":");
+
+        const userQueue = await db
+          .select({ fileHash: queueTable.fileHash })
+          .from(queueTable)
+          .where(eq(queueTable.userTg, ctx.from.id))
+          .offset(parseInt(index!))
+          .limit(10);
+
+        let replyMsg = `*Upload Queue*\n\n${escapeMarkdownV2("----------")}`;
+        if (!userQueue.length) replyMsg += "\n_empty list_";
+        else
+          for (const item of userQueue) {
+            replyMsg += `\n🆔 \`${escapeMarkdownV2(item.fileHash!)}\``;
+          }
+        replyMsg += `\n${escapeMarkdownV2("----------")}\n\nTo process an item in queue send \`/queue_item {ITEM_ID}\` command\\.`;
+
+        return bot.api.editMessageText(
+          ctx.chatId!,
+          ctx.callbackQuery.message?.message_id!,
+          replyMsg,
+          {
+            reply_markup: makeQueueListKeyboard(
+              parseInt(index!),
+              userQueue.length >= 10,
+            ),
+          },
+        );
       }
     } catch (error: any) {
       if (currentHash)
         cache.del(`downReqOptions:${ctx.from.id}:${currentHash}`);
-      if (currentFile) unlink(currentFile);
+      if (currentFile) rm(currentFile, { recursive: true });
 
       bot.api.editMessageText(
         ctx.chatId!,
@@ -482,12 +683,9 @@ async function compressFile(
   return new Promise((resolve, reject) => {
     const sevenZip = spawn("7z", args);
 
-    sevenZip.on("close", (code) => {
-      if (code === 0) {
-        resolve(outputBase);
-      } else {
-        reject(new Error(`7z exited with code ${code}`));
-      }
+    sevenZip.on("close", async (code) => {
+      if (code === 0) resolve(outputBase);
+      else reject(new Error(`7z exited with code ${code}`));
     });
 
     sevenZip.on("error", (err) => {
@@ -498,4 +696,54 @@ async function compressFile(
       );
     });
   });
+}
+
+function makeQueueListKeyboard(currentIndex: number, nextPage = true) {
+  let keyboard = new InlineKeyboard();
+  if (currentIndex) keyboard = keyboard.text("<-", `queue:${currentIndex - 1}`);
+  keyboard = keyboard.text(`${currentIndex + 1}`, "ignored");
+  if (nextPage) keyboard = keyboard.text("->", `queue:${currentIndex + 1}`);
+  return keyboard;
+}
+
+function makeRequestKeyboard(
+  hash: string,
+  compression: boolean,
+  forceCompression: boolean,
+) {
+  return new InlineKeyboard()
+    .text(
+      `Compression: ${compression ? "ON" : "OFF"}`,
+      forceCompression ? "forceCompression" : `toggleCompression:${hash}`,
+    )
+    .style("primary")
+    .row()
+    .text("❌ Cancel", `cancelReq:${hash}`)
+    .style("danger")
+    .text("✅ Confirm", `confirmReq:${hash}`)
+    .style("success");
+}
+
+function makeUploadKeyboard(hash: string, startButton: boolean, retry = false) {
+  let keyboard = new InlineKeyboard()
+    .text("Give up!", `giveUp:${hash}`)
+    .style("danger");
+
+  if (startButton)
+    keyboard = keyboard
+      .text(retry ? "Retry" : "Start", `uploadReq:${hash}`)
+      .style("primary");
+
+  return keyboard;
+}
+
+function getChunkStatusCharacter(status: string) {
+  const statusMap: any = {
+    "NOT-STARTED": "⚪️",
+    UPLOADING: "🟡",
+    DONE: "🟢",
+    FAILED: "🔴",
+  };
+
+  return statusMap[status];
 }
