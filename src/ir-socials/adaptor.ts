@@ -13,6 +13,7 @@ export abstract class Adaptor extends EventEmitter {
 
   protected abstract getOffset(): Promise<typeof this.offsetId>;
   protected abstract setOffset(offset: typeof this.offsetId): Promise<void>;
+  abstract httpPing(): string | Promise<string>;
   abstract startPolling(): void | Promise<void>;
   abstract sendMessage(payload: any): Promise<void>;
 }

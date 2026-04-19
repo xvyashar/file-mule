@@ -11,6 +11,8 @@ import { createHash } from "node:crypto";
 import { InlineKeyboard } from "grammy";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { BaleAdaptor } from "../ir-socials/bale.adaptor.js";
+import { RubikaAdaptor } from "../ir-socials/rk.adaptor.js";
 
 export async function registerCommands() {
   bot.command("start", async (ctx) => {
@@ -83,6 +85,34 @@ export async function registerCommands() {
         },
       );
     }
+  });
+
+  bot.command("ping_bale", async (ctx) => {
+    const pingMsg = await ctx.reply("Pinging...", {
+      reply_parameters: { message_id: ctx.msg.message_id },
+    });
+
+    const result = await BaleAdaptor.getInstance().httpPing();
+
+    bot.api.editMessageText(
+      ctx.chatId,
+      pingMsg.message_id,
+      `${emojifyStatusCode(result)} Ping Result: ${result}`,
+    );
+  });
+
+  bot.command("ping_rubika", async (ctx) => {
+    const pingMsg = await ctx.reply("Pinging...", {
+      reply_parameters: { message_id: ctx.msg.message_id },
+    });
+
+    const result = await RubikaAdaptor.getInstance().httpPing();
+
+    bot.api.editMessageText(
+      ctx.chatId,
+      pingMsg.message_id,
+      `${emojifyStatusCode(result)} Ping Result: ${result}`,
+    );
   });
 
   bot.command("queue", async (ctx) => {
@@ -203,6 +233,14 @@ export async function registerCommands() {
       command: "relink",
       description:
         "Relink your telegram account with either your bale or your rubika account",
+    },
+    {
+      command: "ping_bale",
+      description: "HTTP ping bale api to see if its reachable",
+    },
+    {
+      command: "ping_rubika",
+      description: "HTTP ping rubika api to see if its reachable",
     },
     { command: "queue", description: "Shows your pending uploads queue" },
     { command: "queue_item", description: "Manage an item in the queue" },
@@ -755,6 +793,13 @@ function md5(str: string): Promise<string> {
       resolve(hash.read().toString("hex"));
     });
   });
+}
+
+function emojifyStatusCode(code: string) {
+  const n = parseInt(code);
+  if (!n || Number.isNaN(n)) return "🔴";
+
+  return n >= 200 && n < 400 ? "🟢" : "🔴";
 }
 
 function formatFileSize(bytes: number, decimals = 2) {

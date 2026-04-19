@@ -22,7 +22,7 @@ export class RubikaAdaptor extends Adaptor {
   }
 
   // singleton
-  static async getInstance() {
+  static getInstance() {
     if (!RubikaAdaptor.instance) {
       RubikaAdaptor.instance = new RubikaAdaptor();
     }
@@ -54,6 +54,20 @@ export class RubikaAdaptor extends Adaptor {
     return;
   }
 
+  async httpPing() {
+    try {
+      const { status } = await this.api.post("/getUpdates", {
+        limit: 1,
+      });
+      return status.toString();
+    } catch (error) {
+      if (error instanceof AxiosError) {
+        return `${error.response?.status ?? error.status}`;
+      }
+      return "undefined";
+    }
+  }
+
   async startPolling() {
     if (this.intervalId) return;
     if (!this.offsetId) this.offsetId = await this.getOffset();
@@ -81,7 +95,7 @@ export class RubikaAdaptor extends Adaptor {
       } catch (error) {
         if (error instanceof AxiosError) {
           console.log(
-            `Rubika: getUpdates method call failed -> ${error.status}`,
+            `Rubika: getUpdates method call failed -> ${error.response?.status || error.status}`,
           );
         }
       }

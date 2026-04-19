@@ -3,8 +3,8 @@ import { BaleAdaptor } from "./bale.adaptor.js";
 import { registerRKCommands } from "./rk.commands.js";
 import { registerBaleCommands } from "./bale.commands.js";
 
-const baleBot = await BaleAdaptor.getInstance();
-const rkBot = await RubikaAdaptor.getInstance();
+const baleBot = BaleAdaptor.getInstance();
+const rkBot = RubikaAdaptor.getInstance();
 
 registerRKCommands();
 registerBaleCommands();

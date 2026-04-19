@@ -21,7 +21,7 @@ export class BaleAdaptor extends Adaptor {
   }
 
   // singleton
-  static async getInstance() {
+  static getInstance() {
     if (!BaleAdaptor.instance) {
       BaleAdaptor.instance = new BaleAdaptor();
     }
@@ -51,6 +51,20 @@ export class BaleAdaptor extends Adaptor {
       .set({ value: offset.toString() })
       .where(eq(statesTable.key, "baleOffsetId"));
     return;
+  }
+
+  async httpPing() {
+    try {
+      const { status } = await this.api.post("/getUpdates", {
+        limit: 1,
+      });
+      return status.toString();
+    } catch (error) {
+      if (error instanceof AxiosError) {
+        return `${error.response?.status ?? error.status}`;
+      }
+      return "undefined";
+    }
   }
 
   async startPolling() {
