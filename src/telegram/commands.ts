@@ -15,40 +15,28 @@ import { spawn } from "node:child_process";
 export async function registerCommands() {
   bot.command("start", async (ctx) => {
     try {
+      if (!ctx.from) throw new Error("ctx.from does not exist");
+
+      if (!(await isValidUser(ctx.from.id.toString())))
+        return ctx.reply("Sorry! This is a private bot. You can't use it!", {
+          reply_parameters: { message_id: ctx.msg.message_id },
+        });
+
       const user = (
         await db
-          .select({ rubikaId: usersTable.rubikaId })
+          .select({ irSocialId: usersTable.irSocialId })
           .from(usersTable)
           .where(eq(usersTable.telegramId, ctx.from?.id!))
       )[0];
 
-      if (!user) {
-        if (!(await isValidUser(ctx.from?.id.toString()!))) {
-          ctx.reply("Sorry! This is a private bot. You can't use it!", {
-            reply_parameters: { message_id: ctx.msg.message_id },
-          });
-          return;
-        }
-
-        await db.insert(usersTable).values({ telegramId: ctx.from?.id! });
-      }
-
-      if (!user?.rubikaId) {
-        const reqId =
-          (await cache.get<string>(`link_req:${ctx.from?.id}`)) ?? ulid();
-        cache.set(`link_req:${ctx.from?.id}`, reqId, 60000);
-        cache.set(`link_id:${reqId}`, ctx.from?.id, 60000);
-
-        ctx.reply(
-          `Link your account to your rubika account by sending this command in rubika bot:\n\`/link ${reqId}\``,
+      if (!user?.irSocialId)
+        return ctx.reply(
+          "In order to use this bot you should link your telegram account to either your bale or your rubika account.\nPlease choose one of them:",
           {
-            parse_mode: "MarkdownV2",
             reply_parameters: { message_id: ctx.msg.message_id },
+            reply_markup: makeIRSocialChoiceKeyboard(),
           },
         );
-
-        return;
-      }
 
       ctx.reply("You're ready to go!", {
         reply_parameters: { message_id: ctx.msg.message_id },
@@ -64,9 +52,48 @@ export async function registerCommands() {
     }
   });
 
+  bot.command("relink", async (ctx) => {
+    try {
+      if (!ctx.from) throw new Error("ctx.from does not exist");
+
+      if (
+        !(await isValidUser(ctx.from.id.toString()!)) ||
+        !(await isUserLinked(ctx.from.id))
+      )
+        return;
+
+      await db
+        .update(usersTable)
+        .set({ irSocialId: null })
+        .where(eq(usersTable.telegramId, ctx.from.id));
+
+      ctx.reply(
+        "In order to use this bot you should link your telegram account to either your bale or your rubika account.\nPlease choose one of them:",
+        {
+          reply_parameters: { message_id: ctx.msg.message_id },
+          reply_markup: makeIRSocialChoiceKeyboard(),
+        },
+      );
+    } catch (error: any) {
+      ctx.reply(
+        `Something went wrong!\n\`\`\`plain\n${error.stack ?? error}\n\`\`\``,
+        {
+          parse_mode: "MarkdownV2",
+          reply_parameters: { message_id: ctx.msg.message_id },
+        },
+      );
+    }
+  });
+
   bot.command("queue", async (ctx) => {
     try {
       if (!ctx.from) throw new Error("ctx.from does not exist");
+
+      if (
+        !(await isValidUser(ctx.from.id.toString()!)) ||
+        !(await isUserLinked(ctx.from.id))
+      )
+        return;
 
       const userQueue = await db
         .select({ fileHash: queueTable.fileHash })
@@ -107,6 +134,12 @@ export async function registerCommands() {
   bot.command("queue_item", async (ctx) => {
     try {
       if (!ctx.from) throw new Error("ctx.from does not exist");
+
+      if (
+        !(await isValidUser(ctx.from.id.toString()!)) ||
+        !(await isUserLinked(ctx.from.id))
+      )
+        return;
 
       const [_command, hash] = ctx.message?.text.split(" ")!;
 
@@ -166,6 +199,11 @@ export async function registerCommands() {
   });
 
   bot.api.setMyCommands([
+    {
+      command: "relink",
+      description:
+        "Relink your telegram account with either your bale or your rubika account",
+    },
     { command: "queue", description: "Shows your pending uploads queue" },
     { command: "queue_item", description: "Manage an item in the queue" },
   ]);
@@ -173,7 +211,11 @@ export async function registerCommands() {
   bot.on("message:entities:url", async (ctx) => {
     let currentHash;
     try {
-      if (!(await isValidUser(ctx.from.id.toString()))) return;
+      if (
+        !(await isValidUser(ctx.from.id.toString()!)) ||
+        !(await isUserLinked(ctx.from.id))
+      )
+        return;
 
       if (!isValidURL(ctx.message.text))
         return ctx.reply("Not a valid url!", {
@@ -222,7 +264,17 @@ export async function registerCommands() {
         throw error;
       }
 
-      const chunkSize = parseInt(process.env.RK_FILE_CHUNK_SIZE!) * 1024 * 1024;
+      const irSocial = getUserIRSocial(ctx.from.id) as unknown as
+        | "bale"
+        | "rubika";
+      const chunkSize =
+        parseInt(
+          irSocial === "bale"
+            ? process.env.BALE_FILE_CHUNK_SIZE!
+            : process.env.RK_FILE_CHUNK_SIZE!,
+        ) *
+        1024 *
+        1024;
       const chunksCount = Math.ceil(metadata.contentLength / chunkSize);
 
       await cache.set(`downReqOptions:${ctx.from.id}:${hash}`, {
@@ -258,7 +310,11 @@ export async function registerCommands() {
   bot.on("message:file", async (ctx) => {
     let currentHash = "";
     try {
-      if (!(await isValidUser(ctx.from.id.toString()))) return;
+      if (
+        !(await isValidUser(ctx.from.id.toString()!)) ||
+        !(await isUserLinked(ctx.from.id))
+      )
+        return;
 
       const file = await ctx.getFile();
       const hash = await md5(file.file_unique_id);
@@ -288,7 +344,17 @@ export async function registerCommands() {
         );
 
       const url = `https://api.telegram.org/file/bot${process.env.TG_TOKEN}/${file.file_path}`;
-      const chunkSize = parseInt(process.env.RK_FILE_CHUNK_SIZE!) * 1024 * 1024;
+      const irSocial = getUserIRSocial(ctx.from.id) as unknown as
+        | "bale"
+        | "rubika";
+      const chunkSize =
+        parseInt(
+          irSocial === "bale"
+            ? process.env.BALE_FILE_CHUNK_SIZE!
+            : process.env.RK_FILE_CHUNK_SIZE!,
+        ) *
+        1024 *
+        1024;
       const chunksCount = Math.ceil(file.file_size / chunkSize);
 
       await cache.set(`downReqOptions:${ctx.from.id}:${hash}`, {
@@ -331,11 +397,111 @@ export async function registerCommands() {
     });
   });
 
+  bot.callbackQuery("linkReqBale", async (ctx) => {
+    try {
+      await ctx.answerCallbackQuery();
+
+      if (!(await isValidUser(ctx.from.id.toString()!))) return;
+
+      const userExist = !!(
+        await db
+          .select({ id: usersTable.id })
+          .from(usersTable)
+          .where(eq(usersTable.telegramId, ctx.from.id))
+      )[0];
+
+      if (userExist)
+        await db
+          .update(usersTable)
+          .set({ irSocial: "bale" })
+          .where(eq(usersTable.telegramId, ctx.from.id));
+      else
+        await db
+          .insert(usersTable)
+          .values({ telegramId: ctx.from?.id!, irSocial: "bale" });
+
+      const reqId =
+        (await cache.get<string>(`baleLinkReq:${ctx.from?.id}`)) ?? ulid();
+      cache.set(`baleLinkReq:${ctx.from?.id}`, reqId, 60000);
+      cache.set(`baleLinkId:${reqId}`, ctx.from?.id, 60000);
+
+      bot.api.editMessageText(
+        ctx.chatId!,
+        ctx.callbackQuery.message?.message_id!,
+        `Link your account to your bale account by sending this command in bale bot:\n\`/link ${reqId}\``,
+        {
+          parse_mode: "MarkdownV2",
+          reply_markup: new InlineKeyboard(),
+        },
+      );
+    } catch (error: any) {
+      bot.api.editMessageText(
+        ctx.chatId!,
+        ctx.callbackQuery.message?.message_id!,
+        `Something went wrong\\!\n\`\`\`${escapeMarkdownV2(error.stack ?? error)}\n\`\`\``,
+        { parse_mode: "MarkdownV2", reply_markup: new InlineKeyboard() },
+      );
+    }
+  });
+
+  bot.callbackQuery("linkReqRubika", async (ctx) => {
+    try {
+      await ctx.answerCallbackQuery();
+
+      if (!(await isValidUser(ctx.from.id.toString()!))) return;
+
+      const userExist = !!(
+        await db
+          .select({ id: usersTable.id })
+          .from(usersTable)
+          .where(eq(usersTable.telegramId, ctx.from.id))
+      )[0];
+
+      if (userExist)
+        await db
+          .update(usersTable)
+          .set({ irSocial: "rubika" })
+          .where(eq(usersTable.telegramId, ctx.from.id));
+      else
+        await db
+          .insert(usersTable)
+          .values({ telegramId: ctx.from.id, irSocial: "rubika" });
+
+      const reqId =
+        (await cache.get<string>(`rkLinkReq:${ctx.from?.id}`)) ?? ulid();
+      cache.set(`rkLinkReq:${ctx.from?.id}`, reqId, 60000);
+      cache.set(`rkLinkId:${reqId}`, ctx.from?.id, 60000);
+
+      bot.api.editMessageText(
+        ctx.chatId!,
+        ctx.callbackQuery.message?.message_id!,
+        `Link your account to your rubika account by sending this command in rubika bot:\n\`/link ${reqId}\``,
+        {
+          parse_mode: "MarkdownV2",
+          reply_markup: new InlineKeyboard(),
+        },
+      );
+    } catch (error: any) {
+      bot.api.editMessageText(
+        ctx.chatId!,
+        ctx.callbackQuery.message?.message_id!,
+        `Something went wrong\\!\n\`\`\`${escapeMarkdownV2(error.stack ?? error)}\n\`\`\``,
+        { parse_mode: "MarkdownV2", reply_markup: new InlineKeyboard() },
+      );
+    }
+  });
+
   bot.on("callback_query:data", async (ctx) => {
     let currentHash = "";
     let currentFile = "";
     try {
       await ctx.answerCallbackQuery();
+
+      if (
+        !(await isValidUser(ctx.from.id.toString()!)) ||
+        !(await isUserLinked(ctx.from.id))
+      )
+        return;
 
       if (ctx.callbackQuery.data.startsWith("toggleCompression")) {
         const [_command, hash] = ctx.callbackQuery.data.split(":");
@@ -414,6 +580,14 @@ export async function registerCommands() {
             "⚙️ Compressing...",
           );
 
+          const irSocial = getUserIRSocial(ctx.from.id) as unknown as
+            | "bale"
+            | "rubika";
+          const chunkSize = parseInt(
+            irSocial === "bale"
+              ? process.env.BALE_FILE_CHUNK_SIZE!
+              : process.env.RK_FILE_CHUNK_SIZE!,
+          );
           const compressedDir = path.join(
             outPath,
             "..",
@@ -424,7 +598,7 @@ export async function registerCommands() {
           await compressFile(
             outPath,
             compressedDir,
-            parseInt(process.env.RK_FILE_CHUNK_SIZE!),
+            chunkSize,
             process.env.COMPRESSED_PASS!,
           );
 
@@ -555,6 +729,15 @@ async function isValidUser(id: string) {
   return (await cache.get<string[]>("allowedUsers"))!.includes(id);
 }
 
+async function isUserLinked(id: number) {
+  return !!(
+    await db
+      .select({ irSocialId: usersTable.irSocialId })
+      .from(usersTable)
+      .where(eq(usersTable.telegramId, id))
+  )[0]?.irSocialId;
+}
+
 function isValidURL(url: string) {
   try {
     new URL(url);
@@ -613,6 +796,15 @@ async function getUrlMetadata(url: string) {
     contentLength: parseInt(headRes.headers["content-length"]!),
     contentType: headRes.headers["content-type"],
   };
+}
+
+async function getUserIRSocial(tgId: number) {
+  return (
+    await db
+      .select({ irSocial: usersTable.irSocial })
+      .from(usersTable)
+      .where(eq(usersTable.telegramId, tgId))
+  )[0]?.irSocial;
 }
 
 async function startDownload(
@@ -696,6 +888,12 @@ async function compressFile(
       );
     });
   });
+}
+
+function makeIRSocialChoiceKeyboard() {
+  return new InlineKeyboard()
+    .text("Bale", "linkReqBale")
+    .text("Rubika", "linkReqRubika");
 }
 
 function makeQueueListKeyboard(currentIndex: number, nextPage = true) {
