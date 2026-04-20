@@ -354,15 +354,33 @@ export async function registerCommands() {
       )
         return;
 
-      const file = await ctx.getFile();
-      const hash = await md5(file.file_unique_id);
+      const fileObj =
+        ctx.msg.document ||
+        ctx.msg.photo?.[0] ||
+        ctx.msg.video ||
+        ctx.msg.audio ||
+        ctx.msg.voice ||
+        ctx.msg.video_note ||
+        ctx.msg.animation ||
+        ctx.msg.sticker;
 
-      if (!file.file_size)
-        return ctx.reply("❌ Something went wrong\\!\n> No metadata provided", {
-          parse_mode: "MarkdownV2",
-        });
+      if (!fileObj)
+        return ctx.reply("❌ Something went wrong!\nUnsupported file type");
 
-      const isInQueue = (
+      if (!fileObj.file_size)
+        return ctx.reply("❌ Something went wrong!\nNo metadata provided");
+
+      const fileSizeLimit =
+        parseInt(process.env.TG_FILE_SIZE_LIMIT!) * 1024 * 1024;
+
+      if (fileObj.file_size > fileSizeLimit)
+        return ctx.reply(
+          `❌ Your file is too big you can only download files under ${process.env.TG_FILE_SIZE_LIMIT} MB`,
+        );
+
+      const hash = await md5(fileObj.file_unique_id);
+
+      const isInQueue = !!(
         await db
           .select({ id: queueTable.id })
           .from(queueTable)
@@ -372,7 +390,7 @@ export async function registerCommands() {
               eq(queueTable.fileHash, hash),
             ),
           )
-      )[0]?.id!!;
+      )[0]?.id;
       if (isInQueue)
         return ctx.reply(
           "This link exists in the queue without finishing its process!",
@@ -381,7 +399,7 @@ export async function registerCommands() {
           },
         );
 
-      const url = `https://api.telegram.org/file/bot${process.env.TG_TOKEN}/${file.file_path}`;
+      const localMode = process.env.LOCAL_MODE == "true";
       const irSocial = getUserIRSocial(ctx.from.id) as unknown as
         | "bale"
         | "rubika";
@@ -393,13 +411,14 @@ export async function registerCommands() {
         ) *
         1024 *
         1024;
-      const chunksCount = Math.ceil(file.file_size / chunkSize);
+      const chunksCount = Math.ceil(fileObj.file_size / chunkSize);
 
       await cache.set(`downReqOptions:${ctx.from.id}:${hash}`, {
         compression: true,
-        url,
+        localMode,
+        fileId: fileObj.file_id,
         metadata: {
-          contentLength: file.file_size,
+          contentLength: fileObj.file_size,
         },
         chunksCount,
       });
@@ -407,7 +426,7 @@ export async function registerCommands() {
       currentHash = hash;
 
       ctx.reply(
-        `*Telegram Download Request:*\n\n🆔 *Name*: ${escapeMarkdownV2(hash)}\n📏 *Potential Size*: ${escapeMarkdownV2(formatFileSize(file.file_size))}\n📐 *Chunk Size*: ${escapeMarkdownV2(formatFileSize(chunkSize))}\n🧩 *Potential File Chunks*: ${chunksCount}`,
+        `*Telegram Download Request:*\n\n🆔 *Name*: ${escapeMarkdownV2(hash)}\n📏 *Potential Size*: ${escapeMarkdownV2(formatFileSize(fileObj.file_size))}\n📐 *Chunk Size*: ${escapeMarkdownV2(formatFileSize(chunkSize))}\n🧩 *Potential File Chunks*: ${chunksCount}`,
         {
           parse_mode: "MarkdownV2",
           reply_parameters: { message_id: ctx.message.message_id },
@@ -591,21 +610,33 @@ export async function registerCommands() {
         );
 
         //* Download Section
-        let prevPercent = "0";
-        const outPath = await startDownload(ops.url, hash!, (percent) => {
-          let percentStr = percent.toFixed(1);
-          if (prevPercent === percentStr) return;
-          prevPercent = percentStr;
+        let outPath: string | undefined;
+        if (ops.url || !ops.localMode) {
+          let url = ops.url;
+          if (!url) {
+            const { file_path } = await bot.api.getFile(ops.fileId);
+            url = `https://api.telegram.org/file/bot${process.env.TG_TOKEN}/${file_path}`;
+          }
 
-          if (percent % 5 === 0)
-            bot.api.editMessageText(
-              ctx.chatId!,
-              ctx.callbackQuery.message?.message_id!,
-              `Downloading...\n${createProgressBar(percent)} ${percentStr}%`,
-            );
-        });
+          let prevPercent = "0";
+          outPath = await startDownload(ops.url, hash!, (percent) => {
+            let percentStr = percent.toFixed(1);
+            if (prevPercent === percentStr) return;
+            prevPercent = percentStr;
 
-        if (!outPath) return;
+            if (percent % 5 === 0)
+              bot.api.editMessageText(
+                ctx.chatId!,
+                ctx.callbackQuery.message?.message_id!,
+                `Downloading...\n${createProgressBar(percent)} ${percentStr}%`,
+              );
+          });
+        } else {
+          const { file_path } = await bot.api.getFile(ops.fileId);
+          outPath = file_path;
+        }
+
+        if (!outPath) throw new Error("outPath is undefined");
         currentFile = outPath;
 
         let readyFiles = [outPath];

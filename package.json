@@ -4,6 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "build": "tsc",
+    "build:ci": "tsc && npx drizzle-kit migrate",
+    "start": "npm run build && node --env-file=.env dist/bot.js",
     "dev": "tsx watch --env-file=.env src/bot.ts"
   },
   "keywords": [],
@@ -17,6 +20,7 @@
     "typescript": "^6.0.2"
   },
   "dependencies": {
+    "@hono/node-server": "^1.19.14",
     "@libsql/client": "^0.17.2",
     "axios": "^1.15.0",
     "cache-manager": "^7.2.8",
@@ -24,6 +28,7 @@
     "form-data": "^4.0.5",
     "got": "^15.0.2",
     "grammy": "^1.42.0",
+    "hono": "^4.12.14",
     "ulid": "^3.0.2"
   }
 }

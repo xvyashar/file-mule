@@ -1,0 +1,39 @@
+services:
+  telegram-bot-api:
+    image: aiogram/telegram-bot-api:latest
+    env_file:
+      - .env
+    environment:
+      TELEGRAM_LOCAL: "1"
+    volumes:
+      - telegram-bot-api-data:/var/lib/telegram-bot-api
+    ports:
+      - "8081:8081"
+    networks:
+      - internal
+
+  app:
+    build:
+      context: .
+      args:
+        - DB_FILE_NAME=${DB_FILE_NAME}
+    container_name: file-mule
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./downloads:/app/downloads
+      - ./compressed:/app/compressed
+      - ./data:/app/data
+      - telegram-bot-api-data:/var/lib/telegram-bot-api
+    depends_on:
+      - telegram-bot-api
+    networks:
+      - internal
+
+volumes:
+  telegram-bot-api-data:
+
+networks:
+  internal:
+    driver: bridge
