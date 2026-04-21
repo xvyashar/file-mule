@@ -44,7 +44,7 @@ export function startTGBot(
 }
 
 export function startTGBotWithWebhook(app: Hono, webhookEndpoint: string) {
-  app.use(webhookCallback(bot, "hono", { onTimeout: "return" })); // temp
+  app.use(webhookCallback(bot, "hono")); // temp
   bot.use(sequentialize((ctx) => ctx.chatId?.toString() ?? "global"));
 
   registerCommands();

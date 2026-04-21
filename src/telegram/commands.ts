@@ -302,7 +302,7 @@ export async function registerCommands() {
         throw error;
       }
 
-      const irSocial = getUserIRSocial(ctx.from.id) as unknown as
+      const irSocial = (await getUserIRSocial(ctx.from.id)) as unknown as
         | "bale"
         | "rubika";
       const chunkSize =
@@ -400,7 +400,7 @@ export async function registerCommands() {
         );
 
       const localMode = process.env.LOCAL_MODE == "true";
-      const irSocial = getUserIRSocial(ctx.from.id) as unknown as
+      const irSocial = (await getUserIRSocial(ctx.from.id)) as unknown as
         | "bale"
         | "rubika";
       const chunkSize =
@@ -549,392 +549,394 @@ export async function registerCommands() {
   });
 
   bot.on("callback_query:data", async (ctx) => {
-    let currentHash = "";
-    let currentFile = "";
-    try {
-      await ctx.answerCallbackQuery();
-
-      if (
-        !(await isValidUser(ctx.from.id.toString()!)) ||
-        !(await isUserLinked(ctx.from.id))
-      )
-        return;
-
-      if (ctx.callbackQuery.data.startsWith("toggleCompression")) {
-        const [_command, hash] = ctx.callbackQuery.data.split(":");
-        currentHash = hash!;
-        const ops = (await cache.get(
-          `downReqOptions:${ctx.from.id}:${hash}`,
-        )) as any;
-        ops.compression = !ops.compression;
-        await cache.set(`downReqOptions:${ctx.from.id}:${hash}`, ops);
-
-        await bot.api.editMessageReplyMarkup(
-          ctx.chatId!,
-          ctx.callbackQuery.message?.message_id!,
-          {
-            reply_markup: makeRequestKeyboard(hash!, ops.compression, false),
-          },
-        );
-
-        return;
-      }
-
-      if (ctx.callbackQuery.data.startsWith("cancelReq")) {
-        const [_command, hash] = ctx.callbackQuery.data.split(":");
-        await cache.del(`downReqOptions:${ctx.from.id}:${hash}`);
-        currentHash = hash!;
-
-        await bot.api.editMessageText(
-          ctx.chatId!,
-          ctx.callbackQuery.message?.message_id!,
-          "❌ Request has been canceled!",
-          { reply_markup: new InlineKeyboard() },
-        );
-
-        return;
-      }
-
-      if (ctx.callbackQuery.data.startsWith("confirmReq")) {
-        const [_command, hash] = ctx.callbackQuery.data.split(":");
-        currentHash = hash!;
-        const ops = (await cache.get(
-          `downReqOptions:${ctx.from.id}:${hash}`,
-        )) as any;
-
-        await bot.api.editMessageText(
-          ctx.chatId!,
-          ctx.callbackQuery.message?.message_id!,
-          `Downloading...\n${createProgressBar(0)} ${0}%`,
-          { reply_markup: new InlineKeyboard() },
-        );
-
-        //* Download Section
-        let outPath: string | undefined;
-        if (ops.url || !ops.localMode) {
-          let url = ops.url;
-          if (!url) {
-            const { file_path } = await bot.api.getFile(ops.fileId);
-            url = `https://api.telegram.org/file/bot${process.env.TG_TOKEN}/${file_path}`;
-          }
-
-          let prevPercent = "0";
-          outPath = await startDownload(ops.url, hash!, async (percent) => {
-            let percentStr = percent.toFixed(1);
-            if (prevPercent === percentStr) return;
-            prevPercent = percentStr;
-
-            if (percent % 5 === 0)
-              await bot.api.editMessageText(
-                ctx.chatId!,
-                ctx.callbackQuery.message?.message_id!,
-                `Downloading...\n${createProgressBar(percent)} ${percentStr}%`,
-              );
-          });
-        } else {
-          const { file_path } = await bot.api.getFile(ops.fileId);
-          outPath = file_path;
-        }
-
-        if (!outPath) throw new Error("outPath is undefined");
-        currentFile = outPath;
-
-        let readyFiles = [outPath];
-
-        //* Compression Section
-        if (ops.compression) {
-          await bot.api.editMessageText(
-            ctx.chatId!,
-            ctx.callbackQuery.message?.message_id!,
-            "⚙️ Compressing...",
-          );
-
-          const irSocial = getUserIRSocial(ctx.from.id) as unknown as
-            | "bale"
-            | "rubika";
-          const chunkSize = parseInt(
-            irSocial === "bale"
-              ? process.env.BALE_FILE_CHUNK_SIZE!
-              : process.env.RK_FILE_CHUNK_SIZE!,
-          );
-          const compressedDir = path.join(
-            outPath,
-            "..",
-            "..",
-            "compressed",
-            hash!,
-          );
-          await compressFile(
-            outPath,
-            compressedDir,
-            chunkSize,
-            process.env.COMPRESSED_PASS!,
-          );
-
-          await rm(outPath);
-          currentFile = compressedDir;
-
-          const files = await readdir(compressedDir);
-          for (let i = 0; i < files.length; i++) {
-            readyFiles[i] = path.join(compressedDir, files[i]!);
-          }
-        }
-
-        await db.insert(queueTable).values({
-          userTg: ctx.from.id,
-          fileHash: hash,
-          chunks: readyFiles.length,
-          addresses: readyFiles.join(","),
-        });
-
-        cache.del(`downReqOptions:${ctx.from.id}:${hash}`);
-        currentHash = "";
-        currentFile = "";
-
-        await bot.api.deleteMessage(
-          ctx.chatId!,
-          ctx.callbackQuery.message?.message_id!,
-        );
-
-        let uploadMsg = `*Ready to upload\\!*\n\nChunks:`;
-        for (const file of readyFiles) {
-          uploadMsg += escapeMarkdownV2(`\n⚪️ - ${path.basename(file)}`);
-        }
-
-        return ctx.reply(uploadMsg, {
-          parse_mode: "MarkdownV2",
-          reply_markup: makeUploadKeyboard(hash!, true),
-        });
-      }
-
-      if (ctx.callbackQuery.data.startsWith("queue")) {
-        const [_command, index] = ctx.callbackQuery.data.split(":");
-
-        const userQueue = await db
-          .select({ fileHash: queueTable.fileHash })
-          .from(queueTable)
-          .where(eq(queueTable.userTg, ctx.from.id))
-          .offset(parseInt(index!))
-          .limit(10);
-
-        let replyMsg = `*Upload Queue*\n\n${escapeMarkdownV2("----------")}`;
-        if (!userQueue.length) replyMsg += "\n_empty list_";
-        else
-          for (const item of userQueue) {
-            replyMsg += `\n🆔 \`${escapeMarkdownV2(item.fileHash!)}\``;
-          }
-        replyMsg += `\n${escapeMarkdownV2("----------")}\n\nTo process an item in queue send \`/queue_item {ITEM_ID}\` command\\.`;
-
-        return bot.api.editMessageText(
-          ctx.chatId!,
-          ctx.callbackQuery.message?.message_id!,
-          replyMsg,
-          {
-            reply_markup: makeQueueListKeyboard(
-              parseInt(index!),
-              userQueue.length >= 10,
-            ),
-          },
-        );
-      }
-
-      if (ctx.callbackQuery.data.startsWith("giveUp")) {
-        const [_command, hash] = ctx.callbackQuery.data.split(":");
-        const item = (
-          await db
-            .select({ addresses: queueTable.addresses })
-            .from(queueTable)
-            .where(
-              and(
-                eq(queueTable.userTg, ctx.from.id),
-                eq(queueTable.fileHash, hash!),
-              ),
-            )
-        )[0];
-
-        if (!item)
-          return bot.api.editMessageText(
-            ctx.chatId!,
-            ctx.callbackQuery.message?.message_id!,
-            "The file that you're looking for is removed already!",
-          );
-
-        const addresses: string[] = item.addresses?.split(",") as string[];
-        const toGetRemoved = addresses[0]?.includes("compressed")
-          ? path.dirname(addresses[0]!)
-          : addresses[0]!;
-
-        await rm(toGetRemoved, { recursive: true });
-        await db
-          .delete(queueTable)
-          .where(
-            and(
-              eq(queueTable.userTg, ctx.from.id),
-              eq(queueTable.fileHash, hash!),
-            ),
-          );
-
-        return bot.api.editMessageText(
-          ctx.chatId!,
-          ctx.callbackQuery.message?.message_id!,
-          "The file has been removed from your queue successfully!",
-        );
-      }
-
-      if (ctx.callbackQuery.data.startsWith("uploadReq")) {
-        const [_command, hash] = ctx.callbackQuery.data.split(":");
-        const item = (
-          await db
-            .select({
-              id: queueTable.id,
-              fileHash: queueTable.fileHash,
-              addresses: queueTable.addresses,
-              completedChunks: queueTable.completedChunks,
-              lastChunkStatus: queueTable.lastChunkStatus,
-            })
-            .from(queueTable)
-            .where(
-              and(
-                eq(queueTable.userTg, ctx.from.id),
-                eq(queueTable.fileHash, hash!),
-              ),
-            )
-        )[0];
-
-        if (!item)
-          return bot.api.editMessageText(
-            ctx.chatId!,
-            ctx.callbackQuery.message?.message_id!,
-            "The file that you're looking for is removed!",
-          );
+    (async () => {
+      let currentHash = "";
+      let currentFile = "";
+      try {
+        await ctx.answerCallbackQuery();
 
         if (
-          item.lastChunkStatus != "NOT-STARTED" &&
-          item.lastChunkStatus != "FAILED"
+          !(await isValidUser(ctx.from.id.toString()!)) ||
+          !(await isUserLinked(ctx.from.id))
         )
-          return bot.api.editMessageText(
+          return;
+
+        if (ctx.callbackQuery.data.startsWith("toggleCompression")) {
+          const [_command, hash] = ctx.callbackQuery.data.split(":");
+          currentHash = hash!;
+          const ops = (await cache.get(
+            `downReqOptions:${ctx.from.id}:${hash}`,
+          )) as any;
+          ops.compression = !ops.compression;
+          await cache.set(`downReqOptions:${ctx.from.id}:${hash}`, ops);
+
+          await bot.api.editMessageReplyMarkup(
             ctx.chatId!,
             ctx.callbackQuery.message?.message_id!,
-            "Another process is uploading this file. If this is a mistake give up and start over :)",
-          );
-
-        const addresses: string[] = item.addresses?.split(",") as string[];
-
-        const user = (
-          await db
-            .select({
-              irSocial: usersTable.irSocial,
-              irSocialId: usersTable.irSocialId,
-            })
-            .from(usersTable)
-            .where(eq(usersTable.telegramId, ctx.from.id))
-        )[0];
-
-        let completedChunks = item.completedChunks || 0;
-        for (let i = item.completedChunks || 0; i < addresses.length; i++) {
-          //? update states
-          await db
-            .update(queueTable)
-            .set({ lastChunkStatus: "UPLOADING" })
-            .where(eq(queueTable.id, item.id));
-
-          let completedCounter = completedChunks;
-          let uploadMsg = "*Uploading\\.\\.\\.*\n\nChunks:";
-          for (let j = 0; j < addresses.length; j++) {
-            uploadMsg += escapeMarkdownV2(
-              `\n${completedCounter-- > 0 ? "🟢" : j == completedChunks ? "🟡" : "⚪️"} - ${path.basename(addresses[j]!)}`,
-            );
-          }
-
-          await bot.api.editMessageText(
-            ctx.chatId!,
-            ctx.callbackQuery.message?.message_id!,
-            uploadMsg,
             {
-              parse_mode: "MarkdownV2",
-              reply_markup: makeUploadKeyboard(item.fileHash!, false),
+              reply_markup: makeRequestKeyboard(hash!, ops.compression, false),
             },
           );
 
-          const res: { success: boolean; reason?: any } = await (
-            user?.irSocial === "bale"
-              ? BaleAdaptor.getInstance()
-              : RubikaAdaptor.getInstance()
-          ).uploadFile({
-            filePath: addresses[i]!,
-            chat_id: user?.irSocialId!,
+          return;
+        }
+
+        if (ctx.callbackQuery.data.startsWith("cancelReq")) {
+          const [_command, hash] = ctx.callbackQuery.data.split(":");
+          await cache.del(`downReqOptions:${ctx.from.id}:${hash}`);
+          currentHash = hash!;
+
+          await bot.api.editMessageText(
+            ctx.chatId!,
+            ctx.callbackQuery.message?.message_id!,
+            "❌ Request has been canceled!",
+            { reply_markup: new InlineKeyboard() },
+          );
+
+          return;
+        }
+
+        if (ctx.callbackQuery.data.startsWith("confirmReq")) {
+          const [_command, hash] = ctx.callbackQuery.data.split(":");
+          currentHash = hash!;
+          const ops = (await cache.get(
+            `downReqOptions:${ctx.from.id}:${hash}`,
+          )) as any;
+
+          await bot.api.editMessageText(
+            ctx.chatId!,
+            ctx.callbackQuery.message?.message_id!,
+            `Downloading...\n${createProgressBar(0)} ${0}%`,
+            { reply_markup: new InlineKeyboard() },
+          );
+
+          //* Download Section
+          let outPath: string | undefined;
+          if (ops.url || !ops.localMode) {
+            let url = ops.url;
+            if (!url) {
+              const { file_path } = await bot.api.getFile(ops.fileId);
+              url = `https://api.telegram.org/file/bot${process.env.TG_TOKEN}/${file_path}`;
+            }
+
+            let prevPercent = "0";
+            outPath = await startDownload(ops.url, hash!, async (percent) => {
+              let percentStr = percent.toFixed(1);
+              if (prevPercent === percentStr) return;
+              prevPercent = percentStr;
+
+              if (percent % 5 === 0)
+                await bot.api.editMessageText(
+                  ctx.chatId!,
+                  ctx.callbackQuery.message?.message_id!,
+                  `Downloading...\n${createProgressBar(percent)} ${percentStr}%`,
+                );
+            });
+          } else {
+            const { file_path } = await bot.api.getFile(ops.fileId);
+            outPath = file_path;
+          }
+
+          if (!outPath) throw new Error("outPath is undefined");
+          currentFile = outPath;
+
+          let readyFiles = [outPath];
+
+          //* Compression Section
+          if (ops.compression) {
+            await bot.api.editMessageText(
+              ctx.chatId!,
+              ctx.callbackQuery.message?.message_id!,
+              "⚙️ Compressing...",
+            );
+
+            const irSocial = (await getUserIRSocial(ctx.from.id)) as unknown as
+              | "bale"
+              | "rubika";
+            const chunkSize = parseInt(
+              irSocial === "bale"
+                ? process.env.BALE_FILE_CHUNK_SIZE!
+                : process.env.RK_FILE_CHUNK_SIZE!,
+            );
+            const compressedDir = path.join(
+              outPath,
+              "..",
+              "..",
+              "compressed",
+              hash!,
+            );
+            await compressFile(
+              outPath,
+              compressedDir,
+              chunkSize,
+              process.env.COMPRESSED_PASS!,
+            );
+
+            await rm(outPath);
+            currentFile = compressedDir;
+
+            const files = await readdir(compressedDir);
+            for (let i = 0; i < files.length; i++) {
+              readyFiles[i] = path.join(compressedDir, files[i]!);
+            }
+          }
+
+          await db.insert(queueTable).values({
+            userTg: ctx.from.id,
+            fileHash: hash,
+            chunks: readyFiles.length,
+            addresses: readyFiles.join(","),
           });
 
-          if (res.success)
+          cache.del(`downReqOptions:${ctx.from.id}:${hash}`);
+          currentHash = "";
+          currentFile = "";
+
+          await bot.api.deleteMessage(
+            ctx.chatId!,
+            ctx.callbackQuery.message?.message_id!,
+          );
+
+          let uploadMsg = `*Ready to upload\\!*\n\nChunks:`;
+          for (const file of readyFiles) {
+            uploadMsg += escapeMarkdownV2(`\n⚪️ - ${path.basename(file)}`);
+          }
+
+          return ctx.reply(uploadMsg, {
+            parse_mode: "MarkdownV2",
+            reply_markup: makeUploadKeyboard(hash!, true),
+          });
+        }
+
+        if (ctx.callbackQuery.data.startsWith("queue")) {
+          const [_command, index] = ctx.callbackQuery.data.split(":");
+
+          const userQueue = await db
+            .select({ fileHash: queueTable.fileHash })
+            .from(queueTable)
+            .where(eq(queueTable.userTg, ctx.from.id))
+            .offset(parseInt(index!))
+            .limit(10);
+
+          let replyMsg = `*Upload Queue*\n\n${escapeMarkdownV2("----------")}`;
+          if (!userQueue.length) replyMsg += "\n_empty list_";
+          else
+            for (const item of userQueue) {
+              replyMsg += `\n🆔 \`${escapeMarkdownV2(item.fileHash!)}\``;
+            }
+          replyMsg += `\n${escapeMarkdownV2("----------")}\n\nTo process an item in queue send \`/queue_item {ITEM_ID}\` command\\.`;
+
+          return bot.api.editMessageText(
+            ctx.chatId!,
+            ctx.callbackQuery.message?.message_id!,
+            replyMsg,
+            {
+              reply_markup: makeQueueListKeyboard(
+                parseInt(index!),
+                userQueue.length >= 10,
+              ),
+            },
+          );
+        }
+
+        if (ctx.callbackQuery.data.startsWith("giveUp")) {
+          const [_command, hash] = ctx.callbackQuery.data.split(":");
+          const item = (
+            await db
+              .select({ addresses: queueTable.addresses })
+              .from(queueTable)
+              .where(
+                and(
+                  eq(queueTable.userTg, ctx.from.id),
+                  eq(queueTable.fileHash, hash!),
+                ),
+              )
+          )[0];
+
+          if (!item)
+            return bot.api.editMessageText(
+              ctx.chatId!,
+              ctx.callbackQuery.message?.message_id!,
+              "The file that you're looking for is removed already!",
+            );
+
+          const addresses: string[] = item.addresses?.split(",") as string[];
+          const toGetRemoved = addresses[0]?.includes("compressed")
+            ? path.dirname(addresses[0]!)
+            : addresses[0]!;
+
+          await rm(toGetRemoved, { recursive: true });
+          await db
+            .delete(queueTable)
+            .where(
+              and(
+                eq(queueTable.userTg, ctx.from.id),
+                eq(queueTable.fileHash, hash!),
+              ),
+            );
+
+          return bot.api.editMessageText(
+            ctx.chatId!,
+            ctx.callbackQuery.message?.message_id!,
+            "The file has been removed from your queue successfully!",
+          );
+        }
+
+        if (ctx.callbackQuery.data.startsWith("uploadReq")) {
+          const [_command, hash] = ctx.callbackQuery.data.split(":");
+          const item = (
+            await db
+              .select({
+                id: queueTable.id,
+                fileHash: queueTable.fileHash,
+                addresses: queueTable.addresses,
+                completedChunks: queueTable.completedChunks,
+                lastChunkStatus: queueTable.lastChunkStatus,
+              })
+              .from(queueTable)
+              .where(
+                and(
+                  eq(queueTable.userTg, ctx.from.id),
+                  eq(queueTable.fileHash, hash!),
+                ),
+              )
+          )[0];
+
+          if (!item)
+            return bot.api.editMessageText(
+              ctx.chatId!,
+              ctx.callbackQuery.message?.message_id!,
+              "The file that you're looking for is removed!",
+            );
+
+          if (
+            item.lastChunkStatus != "NOT-STARTED" &&
+            item.lastChunkStatus != "FAILED"
+          )
+            return bot.api.editMessageText(
+              ctx.chatId!,
+              ctx.callbackQuery.message?.message_id!,
+              "Another process is uploading this file. If this is a mistake give up and start over :)",
+            );
+
+          const addresses: string[] = item.addresses?.split(",") as string[];
+
+          const user = (
+            await db
+              .select({
+                irSocial: usersTable.irSocial,
+                irSocialId: usersTable.irSocialId,
+              })
+              .from(usersTable)
+              .where(eq(usersTable.telegramId, ctx.from.id))
+          )[0];
+
+          let completedChunks = item.completedChunks || 0;
+          for (let i = item.completedChunks || 0; i < addresses.length; i++) {
+            //? update states
             await db
               .update(queueTable)
-              .set({
-                lastChunkStatus: "NOT-STARTED",
-                completedChunks: ++completedChunks,
-              })
-              .where(eq(queueTable.id, item.id));
-          else {
-            await db
-              .update(queueTable)
-              .set({
-                lastChunkStatus: "FAILED",
-              })
+              .set({ lastChunkStatus: "UPLOADING" })
               .where(eq(queueTable.id, item.id));
 
             let completedCounter = completedChunks;
-            let uploadMsg = "*Failed to upload\\!*\n\nChunks:";
+            let uploadMsg = "*Uploading\\.\\.\\.*\n\nChunks:";
             for (let j = 0; j < addresses.length; j++) {
               uploadMsg += escapeMarkdownV2(
-                `\n${completedCounter-- > 0 ? "🟢" : j == completedChunks ? "🔴" : "⚪️"} - ${path.basename(addresses[j]!)}`,
+                `\n${completedCounter-- > 0 ? "🟢" : j == completedChunks ? "🟡" : "⚪️"} - ${path.basename(addresses[j]!)}`,
               );
             }
-            uploadMsg += `\n\n\`\`\`${res.reason.stack ?? res.reason}\`\`\``;
 
-            return bot.api.editMessageText(
+            await bot.api.editMessageText(
               ctx.chatId!,
               ctx.callbackQuery.message?.message_id!,
               uploadMsg,
               {
                 parse_mode: "MarkdownV2",
-                reply_markup: makeUploadKeyboard(item.fileHash!, true, true),
+                reply_markup: makeUploadKeyboard(item.fileHash!, false),
               },
             );
+
+            const res: { success: boolean; reason?: any } = await (
+              user?.irSocial === "bale"
+                ? BaleAdaptor.getInstance()
+                : RubikaAdaptor.getInstance()
+            ).uploadFile({
+              filePath: addresses[i]!,
+              chat_id: user?.irSocialId!,
+            });
+
+            if (res.success)
+              await db
+                .update(queueTable)
+                .set({
+                  lastChunkStatus: "NOT-STARTED",
+                  completedChunks: ++completedChunks,
+                })
+                .where(eq(queueTable.id, item.id));
+            else {
+              await db
+                .update(queueTable)
+                .set({
+                  lastChunkStatus: "FAILED",
+                })
+                .where(eq(queueTable.id, item.id));
+
+              let completedCounter = completedChunks;
+              let uploadMsg = "*Failed to upload\\!*\n\nChunks:";
+              for (let j = 0; j < addresses.length; j++) {
+                uploadMsg += escapeMarkdownV2(
+                  `\n${completedCounter-- > 0 ? "🟢" : j == completedChunks ? "🔴" : "⚪️"} - ${path.basename(addresses[j]!)}`,
+                );
+              }
+              uploadMsg += `\n\n\`\`\`${res.reason.stack ?? res.reason}\`\`\``;
+
+              return bot.api.editMessageText(
+                ctx.chatId!,
+                ctx.callbackQuery.message?.message_id!,
+                uploadMsg,
+                {
+                  parse_mode: "MarkdownV2",
+                  reply_markup: makeUploadKeyboard(item.fileHash!, true, true),
+                },
+              );
+            }
           }
-        }
 
-        const toGetRemoved = addresses[0]?.includes("compressed")
-          ? path.dirname(addresses[0]!)
-          : addresses[0]!;
+          const toGetRemoved = addresses[0]?.includes("compressed")
+            ? path.dirname(addresses[0]!)
+            : addresses[0]!;
 
-        await rm(toGetRemoved, { recursive: true });
+          await rm(toGetRemoved, { recursive: true });
 
-        await db
-          .delete(queueTable)
-          .where(
-            and(
-              eq(queueTable.userTg, ctx.from.id),
-              eq(queueTable.fileHash, hash!),
-            ),
+          await db
+            .delete(queueTable)
+            .where(
+              and(
+                eq(queueTable.userTg, ctx.from.id),
+                eq(queueTable.fileHash, hash!),
+              ),
+            );
+
+          return bot.api.editMessageText(
+            ctx.chatId!,
+            ctx.callbackQuery.message?.message_id!,
+            "✅ Congratulations! Your file got uploaded successfully.",
           );
+        }
+      } catch (error: any) {
+        if (currentHash)
+          cache.del(`downReqOptions:${ctx.from.id}:${currentHash}`);
+        if (currentFile) rm(currentFile, { recursive: true });
 
-        return bot.api.editMessageText(
+        bot.api.editMessageText(
           ctx.chatId!,
           ctx.callbackQuery.message?.message_id!,
-          "✅ Congratulations! Your file got uploaded successfully.",
+          `Something went wrong\\!\n\`\`\`${escapeMarkdownV2(error.stack ?? error)}\n\`\`\``,
+          { parse_mode: "MarkdownV2" },
         );
       }
-    } catch (error: any) {
-      if (currentHash)
-        cache.del(`downReqOptions:${ctx.from.id}:${currentHash}`);
-      if (currentFile) rm(currentFile, { recursive: true });
-
-      bot.api.editMessageText(
-        ctx.chatId!,
-        ctx.callbackQuery.message?.message_id!,
-        `Something went wrong\\!\n\`\`\`${escapeMarkdownV2(error.stack ?? error)}\n\`\`\``,
-        { parse_mode: "MarkdownV2" },
-      );
-    }
+    })();
   });
 }
 
