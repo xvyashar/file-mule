@@ -5,7 +5,6 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
-    "build:ci": "tsc && npx drizzle-kit migrate",
     "start": "npm run build && node --env-file=.env dist/bot.js",
     "dev": "tsx watch --env-file=.env src/bot.ts"
   },
@@ -20,6 +19,7 @@
     "typescript": "^6.0.2"
   },
   "dependencies": {
+    "@grammyjs/runner": "^2.0.3",
     "@hono/node-server": "^1.19.14",
     "@libsql/client": "^0.17.2",
     "axios": "^1.15.0",

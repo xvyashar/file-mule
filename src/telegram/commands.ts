@@ -619,13 +619,13 @@ export async function registerCommands() {
           }
 
           let prevPercent = "0";
-          outPath = await startDownload(ops.url, hash!, (percent) => {
+          outPath = await startDownload(ops.url, hash!, async (percent) => {
             let percentStr = percent.toFixed(1);
             if (prevPercent === percentStr) return;
             prevPercent = percentStr;
 
             if (percent % 5 === 0)
-              bot.api.editMessageText(
+              await bot.api.editMessageText(
                 ctx.chatId!,
                 ctx.callbackQuery.message?.message_id!,
                 `Downloading...\n${createProgressBar(percent)} ${percentStr}%`,

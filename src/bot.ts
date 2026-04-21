@@ -8,9 +8,23 @@ if (process.env.TG_WEBHOOK_ENDPOINT) {
 
   await startTGBotWithWebhook(app, process.env.TG_WEBHOOK_ENDPOINT);
 
-  serve({
+  const server = serve({
     fetch: app.fetch,
     port: parseInt(process.env.TG_WEBHOOK_PORT!) || 3000,
+  });
+
+  process.on("SIGINT", () => {
+    server.close();
+    process.exit(0);
+  });
+  process.on("SIGTERM", () => {
+    server.close((err) => {
+      if (err) {
+        console.error(err);
+        process.exit(1);
+      }
+      process.exit(0);
+    });
   });
 
   console.log("🚀 Telegram bot has been launched in webhook mode");
