@@ -13,6 +13,7 @@ services:
       - internal
 
   app:
+    image: xvyashar/file-mule:latest
     build:
       context: .
       args:
