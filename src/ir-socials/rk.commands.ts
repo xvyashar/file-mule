@@ -1,17 +1,17 @@
-import { RubikaAdaptor } from "./rk.adaptor.js";
-import { RKUpdateTypeEnum, type RKUpdate } from "./types.js";
-import { db, cache } from "../db/index.js";
-import { usersTable } from "../db/schema.js";
-import { eq } from "drizzle-orm";
-import { bot as tgBot } from "../telegram/index.js";
+import { RubikaAdaptor } from './rk.adaptor.js';
+import { RKUpdateTypeEnum, type RKUpdate } from '../types/index.js';
+import { db, cache } from '../db/index.js';
+import { usersTable } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
+import { bot as tgBot } from '../telegram/index.js';
 
-const bot = await RubikaAdaptor.getInstance();
+const bot = RubikaAdaptor.getInstance();
 
 export function registerRKCommands() {
-  bot.on("message", async (update: RKUpdate) => {
+  bot.on('message', async (update: RKUpdate) => {
     if (
       update.type != RKUpdateTypeEnum.NewMessage ||
-      !update.new_message?.text?.startsWith("/link ")
+      !update.new_message?.text?.startsWith('/link ')
     )
       return;
 
@@ -29,7 +29,7 @@ export function registerRKCommands() {
       .set({ irSocialId: update.chat_id })
       .where(eq(usersTable.telegramId, tgId));
 
-    const res = "Your accounts are now linked together! 🌟";
+    const res = 'Your accounts are now linked together! 🌟';
     await bot.sendMessage({
       chat_id: update.chat_id,
       text: res,

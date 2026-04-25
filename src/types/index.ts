@@ -1,3 +1,22 @@
+export enum ChunkStatus {
+  'NOT-STARTED' = 'NOT-STARTED',
+  UPLOADING = 'UPLOADING',
+  DONE = 'DONE',
+  FAILED = 'FAILED',
+}
+
+export type FileType = 'file' | 'photo' | 'video' | 'audio' | 'voice';
+
+export type DownloadRequest = {
+  compression: boolean;
+  url?: string;
+  localMode?: boolean;
+  id?: string;
+  size: number;
+  type: FileType;
+  hash: string;
+};
+
 export type BaleUpdate = {
   update_id: number;
   message?: BaleMessage;
@@ -30,8 +49,8 @@ export type BaleSendMessage = {
 };
 
 export enum RKUpdateTypeEnum {
-  NewMessage = "NewMessage",
-  StartedBot = "StartedBot",
+  NewMessage = 'NewMessage',
+  StartedBot = 'StartedBot',
 }
 
 export type RKUpdate = {
@@ -43,7 +62,7 @@ export type RKUpdate = {
 export type RKMessage = {
   message_id: string;
   text?: string;
-  sender_type: "User" | "Bot";
+  sender_type: 'User' | 'Bot';
   sender_id: string;
   aux_data: {
     start_id?: string;

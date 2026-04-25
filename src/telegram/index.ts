@@ -1,53 +1,55 @@
-import { Bot, webhookCallback } from "grammy";
-import { cache } from "../db/index.js";
-import { registerCommands } from "./commands.js";
-import type { UserFromGetMe } from "grammy/types";
-import { Hono } from "hono";
-import axios, { AxiosError } from "axios";
-import { sequentialize } from "@grammyjs/runner";
+import { Bot, webhookCallback } from 'grammy';
+import { Hono } from 'hono';
+import { serve } from '@hono/node-server';
 
-if (process.env.LOCAL_MODE == "true") {
-  try {
-    const result = await axios.get(
-      `https://api.telegram.org/bot${process.env.TG_TOKEN}/logOut`,
-    );
+import config from '../config.js';
+import { logOut } from './utils.js';
+import { registerHandlers } from './handlers.js';
+import logger from '../logger/logger.js';
 
-    if (!result.data.ok) throw new Error(result.data);
-  } catch (error) {
-    if (error instanceof AxiosError) {
-      if (error.response?.data.description !== "Logged out") throw error;
-    }
-  }
-}
-
-export const bot = new Bot(process.env.TG_TOKEN!, {
+export const bot = new Bot(config.env.TELEGRAM_BOT_TOKEN, {
   client: {
-    apiRoot:
-      process.env.LOCAL_MODE == "true"
-        ? "http://telegram-bot-api:8081"
-        : "https://api.telegram.org",
+    apiRoot: config.telegram.botApi.baseUrl,
     canUseWebhookReply: (method) =>
-      method === "answerCallbackQuery" || method === "sendChatAction",
+      method === 'answerCallbackQuery' || method === 'sendChatAction',
   },
 });
 
-cache.set("allowedUsers", process.env.ALLOWED_USERS?.split(","));
+export async function startTelegramBot() {
+  if (config.telegram.botApi.localMode)
+    await logOut(config.env.TELEGRAM_BOT_TOKEN); //! consideration: if you were using another telegram bot api server previously, you need to log out from it manually.
 
-export function startTGBot(
-  onStart: (botInfo: UserFromGetMe) => void | Promise<void>,
-) {
-  registerCommands();
+  registerHandlers(bot);
 
-  bot.start({
-    onStart,
+  if (!config.telegram.webhook.enabled) {
+    return bot.start({
+      drop_pending_updates: true,
+    });
+  }
+
+  const app = new Hono();
+  app.use(webhookCallback(bot, 'hono'));
+  const server = serve({
+    fetch: app.fetch,
+    port: config.telegram.webhook.port,
   });
-}
 
-export function startTGBotWithWebhook(app: Hono, webhookEndpoint: string) {
-  app.use(webhookCallback(bot, "hono")); // temp
-  bot.use(sequentialize((ctx) => ctx.chatId?.toString() ?? "global"));
+  process.on('SIGINT', () => {
+    server.close();
+    process.exit(0);
+  });
 
-  registerCommands();
+  process.on('SIGTERM', () => {
+    server.close((err) => {
+      if (err) {
+        logger.error(err.stack ?? err.message, { label: 'telegram/index.ts' });
+        process.exit(1);
+      }
+      process.exit(0);
+    });
+  });
 
-  return bot.api.setWebhook(webhookEndpoint);
+  await bot.api.setWebhook(config.telegram.webhook.endpoint, {
+    drop_pending_updates: true,
+  });
 }

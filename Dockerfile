@@ -8,14 +8,18 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
 
-ARG DB_FILE_NAME
-ENV DB_FILE_NAME=${DB_FILE_NAME}
-
 RUN npm run build
 
-FROM node:24-alpine AS production
+FROM node:24-bookworm-slim AS production
 
-RUN apk add --no-cache 7zip
+RUN apt-get update && apt-get install -y gnupg
+
+# enable non-free repo
+RUN echo "deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware" > /etc/apt/sources.list
+
+RUN apt-get update && \
+  apt-get install -y rar && \
+  rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -25,6 +29,7 @@ RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 
 COPY drizzle.config.ts ./
+COPY config.yaml ./
 
 RUN mkdir -p /app/downloads /app/compressed
 

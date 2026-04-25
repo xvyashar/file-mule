@@ -1,12 +1,15 @@
-import axios, { AxiosError, type AxiosInstance } from "axios";
-import { db } from "../db/index.js";
-import { statesTable } from "../db/schema.js";
-import { eq } from "drizzle-orm";
-import { Adaptor } from "./adaptor.js";
-import type { BaleSendMessage, BaleUpdate } from "./types.js";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import FormData from "form-data";
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import axios, { AxiosError, type AxiosInstance } from 'axios';
+import FormData from 'form-data';
+import { eq } from 'drizzle-orm';
+
+import { db } from '../db/index.js';
+import { statesTable } from '../db/schema.js';
+import { Adaptor } from './adaptor.js';
+import type { BaleSendMessage, BaleUpdate, FileType } from '../types/index.js';
+import logger from '../logger/logger.js';
+const logLabel = { label: 'BaleAdaptor' };
 
 export class BaleAdaptor extends Adaptor {
   protected token = process.env.BALE_TOKEN!;
@@ -23,7 +26,7 @@ export class BaleAdaptor extends Adaptor {
     });
   }
 
-  // singleton
+  //? singleton
   static getInstance() {
     if (!BaleAdaptor.instance) {
       BaleAdaptor.instance = new BaleAdaptor();
@@ -37,11 +40,11 @@ export class BaleAdaptor extends Adaptor {
       await db
         .select({ value: statesTable.value })
         .from(statesTable)
-        .where(eq(statesTable.key, "baleOffsetId"))
+        .where(eq(statesTable.key, 'baleOffsetId'))
     )[0];
 
     if (!state) {
-      await db.insert(statesTable).values({ key: "baleOffsetId" });
+      await db.insert(statesTable).values({ key: 'baleOffsetId' });
       return undefined;
     }
 
@@ -52,13 +55,13 @@ export class BaleAdaptor extends Adaptor {
     await db
       .update(statesTable)
       .set({ value: offset.toString() })
-      .where(eq(statesTable.key, "baleOffsetId"));
+      .where(eq(statesTable.key, 'baleOffsetId'));
     return;
   }
 
   async httpPing() {
     try {
-      const { status } = await this.api.post("/getUpdates", {
+      const { status } = await this.api.post('/getUpdates', {
         limit: 1,
       });
       return status.toString();
@@ -66,7 +69,7 @@ export class BaleAdaptor extends Adaptor {
       if (error instanceof AxiosError) {
         return `${error.response?.status ?? error.status}`;
       }
-      return "undefined";
+      return 'undefined';
     }
   }
 
@@ -78,7 +81,7 @@ export class BaleAdaptor extends Adaptor {
       try {
         const {
           data: { result: updates },
-        } = await this.api.post("/getUpdates", {
+        } = await this.api.post('/getUpdates', {
           offset: this.offsetId,
         });
 
@@ -91,43 +94,78 @@ export class BaleAdaptor extends Adaptor {
             !update.message.from.is_bot &&
             update.message?.text
           )
-            this.emit("message", update);
+            this.emit('message', update);
         }
 
         this.offsetId = lastUpdateId;
         if (lastUpdateId) await this.setOffset(lastUpdateId);
       } catch (error: any) {
         if (error instanceof AxiosError) {
-          console.log(`Bale: getUpdates method call failed -> ${error.status}`);
+          logger.error(
+            `Bale: getUpdates method call failed -> ${error.status}`,
+            logLabel,
+          );
         }
       }
     }, 5000);
   }
 
-  async sendMessage(payload: BaleSendMessage) {
-    await this.api.post("/sendMessage", payload);
-    return;
+  sendMessage(payload: BaleSendMessage) {
+    return this.api.post('/sendMessage', payload) as Promise<void>;
   }
 
   async uploadFile({
     filePath,
+    fileType,
     chat_id,
   }: {
     filePath: string;
+    fileType: FileType;
     chat_id: string;
   }) {
     try {
       await this.retry(
         async () => {
           const formData = new FormData();
-
           const fileBuffer = await readFile(filePath);
-          formData.append("document", fileBuffer, {
-            filename: path.basename(filePath),
-          });
-          formData.append("chat_id", chat_id);
 
-          await this.api.post("/sendDocument", formData);
+          if (fileType == 'file') {
+            formData.append('document', fileBuffer, {
+              filename: path.basename(filePath),
+            });
+            formData.append('chat_id', chat_id);
+
+            await this.api.post('/sendDocument', formData);
+          } else if (fileType == 'photo') {
+            formData.append('photo', fileBuffer, {
+              filename: path.basename(filePath),
+            });
+            formData.append('chat_id', chat_id);
+            formData.append('from_chat_id', chat_id);
+
+            await this.api.post('/sendPhoto', formData);
+          } else if (fileType == 'video') {
+            formData.append('video', fileBuffer, {
+              filename: path.basename(filePath),
+            });
+            formData.append('chat_id', chat_id);
+
+            await this.api.post('/sendVideo', formData);
+          } else if (fileType == 'audio') {
+            formData.append('audio', fileBuffer, {
+              filename: path.basename(filePath),
+            });
+            formData.append('chat_id', chat_id);
+
+            await this.api.post('/sendAudio', formData);
+          } else if (fileType == 'voice') {
+            formData.append('voice', fileBuffer, {
+              filename: path.basename(filePath),
+            });
+            formData.append('chat_id', chat_id);
+
+            await this.api.post('/sendVoice', formData);
+          }
         },
         3,
         5000,

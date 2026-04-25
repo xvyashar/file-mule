@@ -1,12 +1,14 @@
-import axios, { AxiosError, type AxiosInstance } from "axios";
-import { RKUpdateTypeEnum, type RKSendMessage } from "./types.js";
-import { db } from "../db/index.js";
-import { statesTable } from "../db/schema.js";
-import { eq } from "drizzle-orm";
-import { Adaptor } from "./adaptor.js";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import FormData from "form-data";
+import axios, { AxiosError, type AxiosInstance } from 'axios';
+import { eq } from 'drizzle-orm';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import FormData from 'form-data';
+import { RKUpdateTypeEnum, type RKSendMessage } from '../types/index.js';
+import { db } from '../db/index.js';
+import { statesTable } from '../db/schema.js';
+import { Adaptor } from './adaptor.js';
+import logger from '../logger/logger.js';
+const logLabel = { label: 'RubikaAdaptor' };
 
 export class RubikaAdaptor extends Adaptor {
   protected token = process.env.RK_TOKEN!;
@@ -24,7 +26,7 @@ export class RubikaAdaptor extends Adaptor {
     });
   }
 
-  // singleton
+  //? singleton
   static getInstance() {
     if (!RubikaAdaptor.instance) {
       RubikaAdaptor.instance = new RubikaAdaptor();
@@ -38,11 +40,11 @@ export class RubikaAdaptor extends Adaptor {
       await db
         .select({ value: statesTable.value })
         .from(statesTable)
-        .where(eq(statesTable.key, "rubikaOffsetId"))
+        .where(eq(statesTable.key, 'rubikaOffsetId'))
     )[0];
 
     if (!state) {
-      await db.insert(statesTable).values({ key: "rubikaOffsetId" });
+      await db.insert(statesTable).values({ key: 'rubikaOffsetId' });
       return undefined;
     }
 
@@ -53,13 +55,13 @@ export class RubikaAdaptor extends Adaptor {
     await db
       .update(statesTable)
       .set({ value: offset })
-      .where(eq(statesTable.key, "rubikaOffsetId"));
+      .where(eq(statesTable.key, 'rubikaOffsetId'));
     return;
   }
 
   async httpPing() {
     try {
-      const { status } = await this.api.post("/getUpdates", {
+      const { status } = await this.api.post('/getUpdates', {
         limit: 1,
       });
       return status.toString();
@@ -67,7 +69,7 @@ export class RubikaAdaptor extends Adaptor {
       if (error instanceof AxiosError) {
         return `${error.response?.status ?? error.status}`;
       }
-      return "undefined";
+      return 'undefined';
     }
   }
 
@@ -81,7 +83,7 @@ export class RubikaAdaptor extends Adaptor {
           data: {
             data: { next_offset_id, updates },
           },
-        } = await this.api.post("/getUpdates", { offset_id: this.offsetId });
+        } = await this.api.post('/getUpdates', { offset_id: this.offsetId });
 
         this.offsetId = next_offset_id ?? this.offsetId;
         await this.setOffset(this.offsetId!);
@@ -93,21 +95,21 @@ export class RubikaAdaptor extends Adaptor {
           )
             continue;
 
-          this.emit("message", update);
+          this.emit('message', update);
         }
       } catch (error) {
         if (error instanceof AxiosError) {
-          console.log(
+          logger.error(
             `Rubika: getUpdates method call failed -> ${error.response?.status || error.status}`,
+            logLabel,
           );
         }
       }
     }, 5000);
   }
 
-  async sendMessage(payload: RKSendMessage) {
-    await this.api.post("/sendMessage", payload);
-    return;
+  sendMessage(payload: RKSendMessage) {
+    return this.api.post('/sendMessage', payload) as Promise<void>;
   }
 
   async uploadFile({
@@ -125,8 +127,8 @@ export class RubikaAdaptor extends Adaptor {
           if (!uploadUrl) {
             const {
               data: { data },
-            } = await this.api.post("/requestSendFile", {
-              type: "File",
+            } = await this.api.post('/requestSendFile', {
+              type: 'File',
             });
             uploadUrl = data.upload_url;
           }
@@ -135,20 +137,22 @@ export class RubikaAdaptor extends Adaptor {
             const formData = new FormData();
 
             const fileBuffer = await readFile(filePath);
-            formData.append("file", fileBuffer, {
+            formData.append('file', fileBuffer, {
               filename: path.basename(filePath),
             });
 
             const {
-              data: {
-                data: { file_id: fileId },
-              },
+              data: { data },
             } = await axios.post(uploadUrl, formData);
 
-            file_id = fileId;
+            if (!data.file_id)
+              throw new Error(
+                `undefined file_id.\ndata: ${JSON.stringify(data)}`,
+              );
+            file_id = data.file_id;
           }
 
-          await this.api.post("/sendFile", {
+          await this.api.post('/sendFile', {
             chat_id,
             file_id,
             text: path.basename(filePath),

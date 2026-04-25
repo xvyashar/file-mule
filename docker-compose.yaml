@@ -14,10 +14,7 @@ services:
 
   app:
     image: xvyashar/file-mule:latest
-    build:
-      context: .
-      args:
-        - DB_FILE_NAME=${DB_FILE_NAME}
+    build: .
     container_name: file-mule
     restart: unless-stopped
     env_file:
@@ -26,6 +23,7 @@ services:
       - ./downloads:/app/downloads
       - ./compressed:/app/compressed
       - ./data:/app/data
+      - ./config.yaml:/app/config.yaml
       - telegram-bot-api-data:/var/lib/telegram-bot-api
     depends_on:
       - telegram-bot-api

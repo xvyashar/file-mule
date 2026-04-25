@@ -1,0 +1,13 @@
+telegram:
+  webhook:
+    enabled: true
+    port: 3000
+    # endpoint: https://hook.example.com (in case that you're not in local mode)
+  whitelist:
+    - 'YOUR_ACCOUNT_NUMERIC_ID' # replace this list items with your whitelisted user numeric ids or remove this option to make this bot public
+  botApi:
+    localMode: true # using local bot api bypasses 20 MB telegram limit for file downloads
+    baseUrl: http://telegram-bot-api:8081 # or replace it with https://api.telegram.org and turn off the local mode to use the official global api
+limits:
+  downloads: 500 # download size limit
+  chunks: 20 # file chunks size to upload in ir-socials
