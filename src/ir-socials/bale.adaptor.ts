@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { inspect } from 'node:util';
 import axios, { AxiosError, type AxiosInstance } from 'axios';
 import FormData from 'form-data';
 import { eq } from 'drizzle-orm';
@@ -9,7 +10,7 @@ import { statesTable } from '../db/schema.js';
 import { Adaptor } from './adaptor.js';
 import type { BaleSendMessage, BaleUpdate, FileType } from '../types/index.js';
 import config from '../config.js';
-import logger from '../logger/logger.js';
+import logger from '../logger.js';
 const logLabel = { label: 'BaleAdaptor' };
 
 export class BaleAdaptor extends Adaptor {
@@ -173,6 +174,7 @@ export class BaleAdaptor extends Adaptor {
 
       return { success: true };
     } catch (error: any) {
+      logger.error(`Bale Upload Error: ${inspect(error)}`, logLabel);
       return { success: false, reason: error };
     }
   }

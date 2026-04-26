@@ -5,7 +5,7 @@ import { serve } from '@hono/node-server';
 import config from '../config.js';
 import { logOut } from './utils.js';
 import { registerHandlers } from './handlers.js';
-import logger from '../logger/logger.js';
+import logger from '../logger.js';
 
 export const bot = new Bot(config.env.TELEGRAM_BOT_TOKEN, {
   client: {

@@ -1,6 +1,6 @@
 import { startTelegramBot } from './telegram/index.js';
 import { startIRBots } from './ir-socials/index.js';
-import logger from './logger/logger.js';
+import logger from './logger.js';
 import { startQueueCleanupCron } from './schedule.js';
 import { inspect } from 'node:util';
 const logLabel = { label: 'bot.ts' };

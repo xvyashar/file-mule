@@ -1,14 +1,16 @@
-import axios, { AxiosError, type AxiosInstance } from 'axios';
-import { eq } from 'drizzle-orm';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { inspect } from 'node:util';
 import FormData from 'form-data';
+import axios, { AxiosError, type AxiosInstance } from 'axios';
+import { eq } from 'drizzle-orm';
+
 import { RKUpdateTypeEnum, type RKSendMessage } from '../types/index.js';
 import { db } from '../db/index.js';
 import { statesTable } from '../db/schema.js';
 import { Adaptor } from './adaptor.js';
 import config from '../config.js';
-import logger from '../logger/logger.js';
+import logger from '../logger.js';
 const logLabel = { label: 'RubikaAdaptor' };
 
 export class RubikaAdaptor extends Adaptor {
@@ -164,6 +166,7 @@ export class RubikaAdaptor extends Adaptor {
 
       return { success: true };
     } catch (error: any) {
+      logger.error(`Bale Upload Error: ${inspect(error)}`, logLabel);
       return { success: false, reason: error };
     }
   }

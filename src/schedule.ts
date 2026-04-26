@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm';
 
 export function startQueueCleanupCron() {
   return new CronJob(
-    '* * */1 * * *',
+    '0 0 * * * *',
     async () => {
       const items = await db
         .select({
@@ -15,7 +15,7 @@ export function startQueueCleanupCron() {
         .from(queueTable);
 
       const threshold = new Date();
-      threshold.setDate(threshold.getDate() + 1);
+      threshold.setDate(threshold.getDate() - 1);
       threshold.setMinutes(0, 0, 0);
 
       for (const item of items) {

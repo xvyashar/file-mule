@@ -37,7 +37,7 @@ import {
   startDownload,
 } from './utils.js';
 import config from '../config.js';
-import logger from '../logger/logger.js';
+import logger from '../logger.js';
 import {
   ChunkStatus,
   type DownloadRequest,
@@ -506,8 +506,7 @@ export async function registerHandlers(bot: Bot<Context, Api<RawApi>>) {
       { reply_markup: new InlineKeyboard() },
     );
 
-    // dQueue.add(() => processDownload(bot, ctx, ops));
-    processDownload(bot, ctx, ops);
+    dQueue.add(() => processDownload(bot, ctx, ops));
   });
 
   bot.on('callback_query:data', async (ctx) => {
@@ -589,7 +588,6 @@ export async function registerHandlers(bot: Bot<Context, Api<RawApi>>) {
         { reply_markup: new InlineKeyboard() },
       );
 
-      console.log(`uploadReq hash: ${hash}`);
       processUpload(bot, ctx, hash!);
     }
   });
@@ -700,9 +698,6 @@ async function processDownload(
   let currentFile;
   try {
     //* Download
-    const queueTbl = await db.select().from(queueTable);
-    console.log(queueTbl);
-
     if (ops.url || !ops.localMode) {
       let url = ops.url;
       if (!url) {
@@ -782,7 +777,7 @@ async function processDownload(
       }
     }
 
-    console.log({
+    await db.insert(queueTable).values({
       userTg: ctx.from!.id,
       fileType: ops.compression ? 'file' : ops.type,
       fileHash: ops.hash,
@@ -792,20 +787,7 @@ async function processDownload(
       lastTouched: new Date().toISOString(),
     });
 
-    await db
-      .insert(queueTable)
-      .values({
-        userTg: ctx.from!.id,
-        fileType: ops.compression ? 'file' : ops.type,
-        fileHash: ops.hash,
-        filePassword,
-        chunks: readyFiles.length,
-        addresses: readyFiles.join(','),
-        lastTouched: new Date().toISOString(),
-      })
-      .then((res) => console.log(res));
-
-    cache.del(`downReqOptions:${ctx.from!.id}`);
+    await cache.del(`downReqOptions:${ctx.from!.id}`);
     currentFile = '';
 
     await bot.api.deleteMessage(
