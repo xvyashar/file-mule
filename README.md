@@ -5,7 +5,7 @@ A lightweight bridge that carries your files from Telegram to Iranian social pla
 - Telegram API ID & API Hash
 - Docker
 - Node.js & NPM (for database migrations)
-> [!INFO]
+> [!NOTE]
 > You need an API ID and API Hash to run a local Bot API server and bypass Telegram’s 20 MB download limit. Get them here: https://core.telegram.org/api/obtaining_api_id
 
 ## Configurations
@@ -32,7 +32,7 @@ limits:
   #      bale: 20
   #      rubika: 50
 ```
-> [!INFO]
+> [!NOTE]
 > Default values are suitable for most use cases. You’ll likely only need to adjust the whitelist or tweak limits. Other options are likely to get changed for development environment
 
 ### .env
@@ -62,5 +62,5 @@ Yes, installing dependencies is required because `drizzle-kit` depends on `drizz
 ```bash
 docker compose up -d
 ```
-> [!INFO]
+> [!NOTE]
 > The Docker setup uses the latest image tag by default. If you care about stability (you probably should), pin it to a specific version.
