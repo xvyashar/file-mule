@@ -49,87 +49,12 @@ const dQueue = new PQueue({ concurrency: 4 });
 
 export async function registerHandlers(bot: Bot<Context, Api<RawApi>>) {
   bot.use(sequentialize((ctx) => ctx.chatId?.toString() ?? 'global'));
-
-  // bot.catch(async (err) => {
-  //   try {
-  //     const { ctx, error } = err;
-  //     if (error instanceof BotError) {
-  //       if (error.systemIssue)
-  //         logger.error(error.stack ?? error.message, logLabel);
-
-  //       const message = error.systemIssue
-  //         ? `❌ Something went wrong\\!\n\`\`\`${escapeMarkdownV2(error.stack ?? error.message)}\`\`\``
-  //         : error.md
-  //           ? error.message
-  //           : escapeMarkdownV2(error.message);
-  //       switch (error.action) {
-  //         case 'send':
-  //           await bot.api.sendMessage(
-  //             ctx.chatId!,
-  //             message,
-  //             error.replyTo
-  //               ? {
-  //                   parse_mode: 'MarkdownV2',
-  //                   reply_parameters: { message_id: error.replyTo },
-  //                 }
-  //               : { parse_mode: 'MarkdownV2' },
-  //           );
-  //           break;
-  //         case 'delSend': {
-  //           await bot.api.deleteMessage(ctx.chatId!, error.msgId ?? ctx.msgId!);
-  //           await bot.api.sendMessage(
-  //             ctx.chatId!,
-  //             message,
-  //             error.replyTo
-  //               ? {
-  //                   parse_mode: 'MarkdownV2',
-  //                   reply_parameters: { message_id: error.replyTo },
-  //                 }
-  //               : { parse_mode: 'MarkdownV2' },
-  //           );
-  //           break;
-  //         }
-  //         case 'edit':
-  //           await bot.api.editMessageText(
-  //             ctx.chatId!,
-  //             error.msgId ?? ctx.msgId!,
-  //             message,
-  //             {
-  //               parse_mode: 'MarkdownV2',
-  //               reply_markup: error.replyMarkup ?? new InlineKeyboard(),
-  //             },
-  //           );
-  //           break;
-  //       }
-  //     } else {
-  //       const message = `Something went wrong\\!\n\`\`\`${escapeMarkdownV2(err.stack ?? err.message)}\n\`\`\``;
-  //       logger.error(err.stack ?? err.message, logLabel);
-  //       if (ctx.from?.is_bot && ctx.msgId) {
-  //         await bot.api
-  //           .editMessageText(ctx.chatId!, ctx.msgId, message, {
-  //             parse_mode: 'MarkdownV2',
-  //             reply_markup: new InlineKeyboard(),
-  //           })
-  //           .catch(async () => {
-  //             await bot.api.sendMessage(ctx.chatId!, message, {
-  //               parse_mode: 'MarkdownV2',
-  //             });
-  //           });
-  //       } else if (ctx.msgId) {
-  //         await bot.api.sendMessage(ctx.chatId!, message, {
-  //           parse_mode: 'MarkdownV2',
-  //           reply_parameters: { message_id: ctx.msgId },
-  //         });
-  //       }
-  //     }
-  //   } catch (error: any) {
-  //     logger.error(error.stack ?? error, logLabel);
-  //   }
-  // });
-
-  bot.catch(async (err) => {
-    const { ctx, error } = err;
-    await catchError(bot, ctx, error);
+  bot.use(async (ctx, next) => {
+    try {
+      await next();
+    } catch (error) {
+      await catchError(bot, ctx, error);
+    }
   });
 
   bot.use(async (ctx, next) => {
@@ -349,7 +274,7 @@ export async function registerHandlers(bot: Bot<Context, Api<RawApi>>) {
       generateUploadMessage(
         item.chunks!,
         item.completedChunks!,
-        files[item.completedChunks!]!,
+        path.basename(files[item.completedChunks!]!),
         item.lastChunkStatus!,
       ),
       {
@@ -526,8 +451,8 @@ export async function registerHandlers(bot: Bot<Context, Api<RawApi>>) {
       });
   });
 
-  bot.callbackQuery('forceCompression', (ctx) => {
-    return ctx.answerCallbackQuery({
+  bot.callbackQuery('forceCompression', async (ctx) => {
+    await ctx.answerCallbackQuery({
       show_alert: true,
       text: "It's a large file, compression is unavoidable!",
     });
@@ -581,7 +506,8 @@ export async function registerHandlers(bot: Bot<Context, Api<RawApi>>) {
       { reply_markup: new InlineKeyboard() },
     );
 
-    dQueue.add(() => processDownload(bot, ctx, ops));
+    // dQueue.add(() => processDownload(bot, ctx, ops));
+    processDownload(bot, ctx, ops);
   });
 
   bot.on('callback_query:data', async (ctx) => {
@@ -663,6 +589,7 @@ export async function registerHandlers(bot: Bot<Context, Api<RawApi>>) {
         { reply_markup: new InlineKeyboard() },
       );
 
+      console.log(`uploadReq hash: ${hash}`);
       processUpload(bot, ctx, hash!);
     }
   });
@@ -742,7 +669,7 @@ async function catchError(
     } else {
       const message = `Something went wrong\\!\n\`\`\`error\n${escapeMarkdownV2(err.stack ?? err.message)}\`\`\``;
       logger.error(err.stack ?? err.message, logLabel);
-      if (ctx.from?.is_bot && ctx.msgId) {
+      if (ctx.msg?.from?.is_bot && ctx.msgId !== undefined) {
         await bot.api
           .editMessageText(ctx.chatId!, ctx.msgId, message, {
             parse_mode: 'MarkdownV2',
@@ -753,7 +680,7 @@ async function catchError(
               parse_mode: 'MarkdownV2',
             });
           });
-      } else if (ctx.msgId) {
+      } else if (ctx.msgId !== undefined) {
         await bot.api.sendMessage(ctx.chatId!, message, {
           parse_mode: 'MarkdownV2',
           reply_parameters: { message_id: ctx.msgId },
@@ -761,7 +688,7 @@ async function catchError(
       }
     }
   } catch (error: any) {
-    logger.error(error.stack ?? error, logLabel);
+    logger.error(error.stack ?? JSON.stringify(error), logLabel);
   }
 }
 
@@ -773,6 +700,9 @@ async function processDownload(
   let currentFile;
   try {
     //* Download
+    const queueTbl = await db.select().from(queueTable);
+    console.log(queueTbl);
+
     if (ops.url || !ops.localMode) {
       let url = ops.url;
       if (!url) {
@@ -852,7 +782,7 @@ async function processDownload(
       }
     }
 
-    await db.insert(queueTable).values({
+    console.log({
       userTg: ctx.from!.id,
       fileType: ops.compression ? 'file' : ops.type,
       fileHash: ops.hash,
@@ -862,6 +792,19 @@ async function processDownload(
       lastTouched: new Date().toISOString(),
     });
 
+    await db
+      .insert(queueTable)
+      .values({
+        userTg: ctx.from!.id,
+        fileType: ops.compression ? 'file' : ops.type,
+        fileHash: ops.hash,
+        filePassword,
+        chunks: readyFiles.length,
+        addresses: readyFiles.join(','),
+        lastTouched: new Date().toISOString(),
+      })
+      .then((res) => console.log(res));
+
     cache.del(`downReqOptions:${ctx.from!.id}`);
     currentFile = '';
 
@@ -870,11 +813,11 @@ async function processDownload(
       ctx.callbackQuery!.message?.message_id!,
     );
 
-    return ctx.reply(
+    await ctx.reply(
       generateUploadMessage(
         readyFiles.length,
         0,
-        readyFiles[0]!,
+        path.basename(readyFiles[0]!),
         ChunkStatus['NOT-STARTED'],
       ),
       {
@@ -1041,7 +984,7 @@ async function processUpload(
         ),
       );
 
-    return bot.api.editMessageText(
+    await bot.api.editMessageText(
       ctx.chatId!,
       ctx.callbackQuery!.message?.message_id!,
       '🌟 Congratulations! Your file got uploaded successfully.',

@@ -171,6 +171,7 @@ export async function compressFile(
 
   const args = [
     'a', //? add to archive
+    '-o+', //? overwrite if exist
     '-m5', //? compression level (5 is maximum)
     `-v${chunkSize}m`, //? chunk size in MB
     `-hp${password}`, //? encrypt both data and headers
@@ -183,13 +184,13 @@ export async function compressFile(
 
     rar.on('close', async (code) => {
       if (code === 0) resolve(outputBase);
-      else reject(new Error(`7z exited with code ${code}`));
+      else reject(new Error(`rar exited with code ${code}`));
     });
 
     rar.on('error', (err) => {
       reject(
         new Error(
-          `Failed to run 7z: ${err.message}. Make sure 7-Zip is installed.`,
+          `Failed to run rar: ${err.message}. Make sure rar is installed.`,
         ),
       );
     });
@@ -265,7 +266,7 @@ export function generateUploadMessage(
   currentChunkName: string,
   currentChunkStatus: string,
 ) {
-  return `${currentChunkStatus === ChunkStatus.UPLOADING ? '*Uploading\\.\\.\\.*' : ChunkStatus.FAILED ? '*Failed to upload\\!*' : '*Ready to upload\\!*'}\n\n✅ Completed Chunks: \\[${completedChunks}/${totalChunks}\\]\n${emojifyChunkStatus(currentChunkStatus)} Current Chunk: ${currentChunkName}`;
+  return `${currentChunkStatus === ChunkStatus.UPLOADING ? '*Uploading\\.\\.\\.*' : currentChunkStatus === ChunkStatus.FAILED ? '*Failed to upload\\!*' : '*Ready to upload\\!*'}\n\n✅ Completed Chunks: \\[${completedChunks}/${totalChunks}\\]\n${emojifyChunkStatus(currentChunkStatus)} Current Chunk: ${escapeMarkdownV2(currentChunkName)}`;
 }
 
 export function generateProgressBar(percent: number, barLength = 20) {

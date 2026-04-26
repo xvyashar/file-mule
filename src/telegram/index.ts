@@ -10,8 +10,7 @@ import logger from '../logger/logger.js';
 export const bot = new Bot(config.env.TELEGRAM_BOT_TOKEN, {
   client: {
     apiRoot: config.telegram.botApi.baseUrl,
-    canUseWebhookReply: (method) =>
-      method === 'answerCallbackQuery' || method === 'sendChatAction',
+    canUseWebhookReply: () => false,
   },
 });
 
@@ -29,6 +28,7 @@ export async function startTelegramBot() {
 
   const app = new Hono();
   app.use(webhookCallback(bot, 'hono'));
+
   const server = serve({
     fetch: app.fetch,
     port: config.telegram.webhook.port,

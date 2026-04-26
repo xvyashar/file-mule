@@ -8,12 +8,12 @@ import { db } from '../db/index.js';
 import { statesTable } from '../db/schema.js';
 import { Adaptor } from './adaptor.js';
 import type { BaleSendMessage, BaleUpdate, FileType } from '../types/index.js';
+import config from '../config.js';
 import logger from '../logger/logger.js';
 const logLabel = { label: 'BaleAdaptor' };
 
 export class BaleAdaptor extends Adaptor {
-  protected token = process.env.BALE_TOKEN!;
-  protected baseUrl = `https://tapi.bale.ai/bot${this.token}`;
+  protected baseUrl = `https://tapi.bale.ai/bot${config.env.BALE_BOT_TOKEN}`;
   protected api: AxiosInstance;
   protected offsetId: number | undefined;
   static instance: BaleAdaptor;

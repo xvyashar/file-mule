@@ -7,12 +7,12 @@ import { RKUpdateTypeEnum, type RKSendMessage } from '../types/index.js';
 import { db } from '../db/index.js';
 import { statesTable } from '../db/schema.js';
 import { Adaptor } from './adaptor.js';
+import config from '../config.js';
 import logger from '../logger/logger.js';
 const logLabel = { label: 'RubikaAdaptor' };
 
 export class RubikaAdaptor extends Adaptor {
-  protected token = process.env.RK_TOKEN!;
-  protected baseUrl: string = `https://botapi.rubika.ir/v3/${this.token}`;
+  protected baseUrl: string = `https://botapi.rubika.ir/v3/${config.env.RUBIKA_BOT_TOKEN}`;
   protected api: AxiosInstance;
   protected offsetId: string | undefined;
   static instance: RubikaAdaptor;

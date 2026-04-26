@@ -1,8 +1,7 @@
-import type { AxiosInstance } from "axios";
-import EventEmitter from "node:events";
+import type { AxiosInstance } from 'axios';
+import EventEmitter from 'node:events';
 
 export abstract class Adaptor extends EventEmitter {
-  protected abstract token: string;
   protected abstract baseUrl: string;
   protected abstract api: AxiosInstance;
   protected abstract offsetId: string | number | undefined;
