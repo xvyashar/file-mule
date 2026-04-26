@@ -24,9 +24,7 @@ services:
       - ./compressed:/app/compressed
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml
-      - ./info.log:/app/info.log
-      - ./error.log:/app/error.log
-      - ./combined.log:/app/combined.log
+      - ./log:/app/log
       - telegram-bot-api-data:/var/lib/telegram-bot-api
     depends_on:
       - telegram-bot-api

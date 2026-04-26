@@ -1,4 +1,4 @@
-import { mkdir, readdir, rename, rm } from 'node:fs/promises';
+import { readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
 import { ulid } from 'ulid';
@@ -26,7 +26,6 @@ import {
   generateProgressBar,
   generateQueueList,
   generateUploadMessage,
-  getFileFormat,
   getFileMetadata,
   getUrlMetadata,
   getUserIRSocial,
@@ -37,12 +36,12 @@ import {
   startDownload,
 } from './utils.js';
 import config from '../config.js';
-import logger from '../logger.js';
 import {
   ChunkStatus,
   type DownloadRequest,
   type FileType,
 } from '../types/index.js';
+import logger from '../logger.js';
 const logLabel = { label: 'telegram/handlers' };
 
 const dQueue = new PQueue({ concurrency: 4 });
@@ -249,6 +248,7 @@ export async function registerHandlers(bot: Bot<Context, Api<RawApi>>) {
     const item = (
       await db
         .select({
+          fileHash: queueTable.fileHash,
           addresses: queueTable.addresses,
           chunks: queueTable.chunks,
           completedChunks: queueTable.completedChunks,
@@ -274,7 +274,9 @@ export async function registerHandlers(bot: Bot<Context, Api<RawApi>>) {
       generateUploadMessage(
         item.chunks!,
         item.completedChunks!,
-        path.basename(files[item.completedChunks!]!),
+        files.length > 1
+          ? path.basename(files[item.completedChunks!]!)
+          : `${item.fileHash}${path.extname(files[item.completedChunks!]!)}`,
         item.lastChunkStatus!,
       ),
       {
@@ -728,16 +730,6 @@ async function processDownload(
         });
 
       currentFile = file_path;
-
-      const dir = path.join(import.meta.dirname, '..', '..', 'downloads');
-      const fullPath = path.join(dir, `${ops.hash}${getFileFormat(file_path)}`);
-
-      await mkdir(dir, {
-        recursive: true,
-      });
-      await rename(file_path, fullPath);
-
-      currentFile = fullPath;
     }
 
     let readyFiles = [currentFile];
@@ -799,7 +791,9 @@ async function processDownload(
       generateUploadMessage(
         readyFiles.length,
         0,
-        path.basename(readyFiles[0]!),
+        readyFiles.length > 1
+          ? path.basename(readyFiles[0]!)
+          : `${ops.hash}${path.extname(readyFiles[0]!)}`,
         ChunkStatus['NOT-STARTED'],
       ),
       {
@@ -891,13 +885,18 @@ async function processUpload(
         })
         .where(eq(queueTable.id, item.id));
 
+      const fileName =
+        addresses.length > 1
+          ? path.basename(addresses[i]!)
+          : `${item.fileHash}${path.extname(addresses[i]!)}`;
+
       await bot.api.editMessageText(
         ctx.chatId!,
         ctx.callbackQuery!.message?.message_id!,
         generateUploadMessage(
           addresses.length,
           completedChunks,
-          path.basename(addresses[i]!),
+          fileName,
           ChunkStatus.UPLOADING,
         ),
         {
@@ -912,6 +911,7 @@ async function processUpload(
           : RubikaAdaptor.getInstance()
       ).uploadFile({
         filePath: addresses[i]!,
+        fileName,
         fileType: item.fileType as FileType,
         chat_id: user?.irSocialId!,
       });
@@ -940,7 +940,7 @@ async function processUpload(
           generateUploadMessage(
             addresses.length,
             completedChunks,
-            path.basename(addresses[i]!),
+            fileName,
             ChunkStatus.FAILED,
           ) + `\n\n\`\`\`error\n${res.reason?.stack ?? res.reason}\`\`\``,
           {

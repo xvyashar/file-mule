@@ -172,6 +172,7 @@ export async function compressFile(
   const args = [
     'a', //? add to archive
     '-o+', //? overwrite if exist
+    '-ep1', //? exclude base dir
     '-m5', //? compression level (5 is maximum)
     `-v${chunkSize}m`, //? chunk size in MB
     `-hp${password}`, //? encrypt both data and headers

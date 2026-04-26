@@ -116,9 +116,11 @@ export class RubikaAdaptor extends Adaptor {
 
   async uploadFile({
     filePath,
+    fileName,
     chat_id,
   }: {
     filePath: string;
+    fileName?: string | undefined;
     chat_id: string;
   }) {
     try {
@@ -140,7 +142,7 @@ export class RubikaAdaptor extends Adaptor {
 
             const fileBuffer = await readFile(filePath);
             formData.append('file', fileBuffer, {
-              filename: path.basename(filePath),
+              filename: fileName ?? path.basename(filePath),
             });
 
             const {
@@ -157,7 +159,6 @@ export class RubikaAdaptor extends Adaptor {
           await this.api.post('/sendFile', {
             chat_id,
             file_id,
-            text: path.basename(filePath),
           });
         },
         3,
@@ -166,7 +167,10 @@ export class RubikaAdaptor extends Adaptor {
 
       return { success: true };
     } catch (error: any) {
-      logger.error(`Bale Upload Error: ${inspect(error)}`, logLabel);
+      logger.error(
+        `Rubika Upload Error: ${inspect(error?.response?.data ?? error)}`,
+        logLabel,
+      );
       return { success: false, reason: error };
     }
   }

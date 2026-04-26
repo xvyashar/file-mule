@@ -37,9 +37,18 @@ const filesFormat = printf(({ level, message, label, timestamp }) => {
 });
 
 const transports: Transport[] = [
-  new winstonTransports.File({ filename: 'error.log', level: 'error' }),
-  new winstonTransports.File({ filename: 'info.log', level: 'info' }),
   new winstonTransports.File({
+    dirname: 'log',
+    filename: 'error.log',
+    level: 'error',
+  }),
+  new winstonTransports.File({
+    dirname: 'log',
+    filename: 'info.log',
+    level: 'info',
+  }),
+  new winstonTransports.File({
+    dirname: 'log',
     filename: 'combined.log',
     maxFiles: 2,
     maxsize: 1048576, // 1MB

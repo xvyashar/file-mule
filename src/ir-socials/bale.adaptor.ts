@@ -117,10 +117,12 @@ export class BaleAdaptor extends Adaptor {
 
   async uploadFile({
     filePath,
+    fileName,
     fileType,
     chat_id,
   }: {
     filePath: string;
+    fileName?: string | undefined;
     fileType: FileType;
     chat_id: string;
   }) {
@@ -132,14 +134,14 @@ export class BaleAdaptor extends Adaptor {
 
           if (fileType == 'file') {
             formData.append('document', fileBuffer, {
-              filename: path.basename(filePath),
+              filename: fileName ?? path.basename(filePath),
             });
             formData.append('chat_id', chat_id);
 
             await this.api.post('/sendDocument', formData);
           } else if (fileType == 'photo') {
             formData.append('photo', fileBuffer, {
-              filename: path.basename(filePath),
+              filename: fileName ?? path.basename(filePath),
             });
             formData.append('chat_id', chat_id);
             formData.append('from_chat_id', chat_id);
@@ -147,21 +149,21 @@ export class BaleAdaptor extends Adaptor {
             await this.api.post('/sendPhoto', formData);
           } else if (fileType == 'video') {
             formData.append('video', fileBuffer, {
-              filename: path.basename(filePath),
+              filename: fileName ?? path.basename(filePath),
             });
             formData.append('chat_id', chat_id);
 
             await this.api.post('/sendVideo', formData);
           } else if (fileType == 'audio') {
             formData.append('audio', fileBuffer, {
-              filename: path.basename(filePath),
+              filename: fileName ?? path.basename(filePath),
             });
             formData.append('chat_id', chat_id);
 
             await this.api.post('/sendAudio', formData);
           } else if (fileType == 'voice') {
             formData.append('voice', fileBuffer, {
-              filename: path.basename(filePath),
+              filename: fileName ?? path.basename(filePath),
             });
             formData.append('chat_id', chat_id);
 
@@ -174,7 +176,10 @@ export class BaleAdaptor extends Adaptor {
 
       return { success: true };
     } catch (error: any) {
-      logger.error(`Bale Upload Error: ${inspect(error)}`, logLabel);
+      logger.error(
+        `Bale Upload Error: ${inspect(error?.response?.data ?? error)}`,
+        logLabel,
+      );
       return { success: false, reason: error };
     }
   }
