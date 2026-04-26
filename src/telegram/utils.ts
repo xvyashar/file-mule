@@ -161,12 +161,12 @@ export async function startDownload(
 export async function compressFile(
   inputFile: string,
   outputDir: string,
+  fileName: string,
   chunkSize: number,
   password: string,
 ) {
   await mkdir(outputDir, { recursive: true });
 
-  const fileName = path.basename(inputFile, path.extname(inputFile));
   const outputBase = path.join(outputDir, `${fileName}.rar`);
 
   const args = [

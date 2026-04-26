@@ -33,7 +33,7 @@ const consoleFormat = printf(({ level, message, label, timestamp }) => {
 const filesFormat = printf(({ level, message, label, timestamp }) => {
   const spaces = ' '.repeat(7 - level.length);
 
-  return `${timestamp} ${spaces}${level} [${label}] ${message}`;
+  return `${timestamp} ${spaces}${level.toUpperCase()} [${label}] ${message}`;
 });
 
 const transports: Transport[] = [

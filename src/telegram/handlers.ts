@@ -228,7 +228,7 @@ export async function registerHandlers(bot: Bot<Context, Api<RawApi>>) {
       userQueue.length >= 10
         ? {
             parse_mode: 'MarkdownV2',
-            reply_markup: makeQueueListKeyboard(0, true),
+            reply_markup: makeQueueListKeyboard(0, 10, true),
           }
         : {
             parse_mode: 'MarkdownV2',
@@ -529,8 +529,10 @@ export async function registerHandlers(bot: Bot<Context, Api<RawApi>>) {
         ctx.callbackQuery.message?.message_id!,
         generateQueueList(userQueue),
         {
+          parse_mode: 'MarkdownV2',
           reply_markup: makeQueueListKeyboard(
             parseInt(index!),
+            10,
             userQueue.length >= 10,
           ),
         },
@@ -758,7 +760,13 @@ async function processDownload(
         ops.hash,
       );
       filePassword = ulid();
-      await compressFile(currentFile, compressedDir, chunkSize, filePassword);
+      await compressFile(
+        currentFile,
+        compressedDir,
+        ops.hash,
+        chunkSize,
+        filePassword,
+      );
 
       await rm(currentFile);
       currentFile = compressedDir;

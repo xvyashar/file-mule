@@ -6,11 +6,16 @@ export function makeIRSocialChoiceKeyboard() {
     .text('Rubika', 'linkReqRubika');
 }
 
-export function makeQueueListKeyboard(currentIndex: number, nextPage = true) {
+export function makeQueueListKeyboard(
+  currentIndex: number,
+  limit: number,
+  nextPage = true,
+) {
   let keyboard = new InlineKeyboard();
-  if (currentIndex) keyboard = keyboard.text('<-', `queue:${currentIndex - 1}`);
-  keyboard = keyboard.text(`${currentIndex + 1}`, 'ignored');
-  if (nextPage) keyboard = keyboard.text('->', `queue:${currentIndex + 1}`);
+  if (currentIndex)
+    keyboard = keyboard.text('<-', `queue:${currentIndex - limit}`);
+  keyboard = keyboard.text(`${currentIndex / limit + 1}`, 'ignored');
+  if (nextPage) keyboard = keyboard.text('->', `queue:${currentIndex + limit}`);
   return keyboard;
 }
 
